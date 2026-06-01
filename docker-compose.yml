@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  douyin-spark:
+    build: .
+    container_name: douyin-spark
+    ports:
+      - "5000:5000"
+    volumes:
+      # 持久化登录凭证和配置
+      - ./auth:/app/auth
+      - ./config:/app/config
+      - ./logs:/app/logs
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped

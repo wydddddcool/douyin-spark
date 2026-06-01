@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抖音续火花</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242733;
+    --border: #2e3141;
+    --text: #e1e4ed;
+    --text2: #8b8fa3;
+    --accent: #6c5ce7;
+    --accent2: #a29bfe;
+    --success: #00b894;
+    --warn: #fdcb6e;
+    --error: #e17055;
+    --fire: #ff6b35;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; line-height: 1.6;
+  }
+  .container { max-width: 800px; margin: 0 auto; padding: 24px 20px; }
+
+  /* Header */
+  .header {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 24px; border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .header h1 { font-size: 22px; font-weight: 600; }
+  .header .fire { font-size: 28px; }
+  .header .subtitle { color: var(--text2); font-size: 13px; }
+
+  /* Status Cards */
+  .status-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px; margin-bottom: 24px;
+  }
+  .status-card {
+    background: var(--surface); border-radius: 12px; padding: 16px;
+    border: 1px solid var(--border);
+  }
+  .status-card .label { font-size: 12px; color: var(--text2); margin-bottom: 4px; }
+  .status-card .value { font-size: 18px; font-weight: 600; }
+  .status-card .value.ok { color: var(--success); }
+  .status-card .value.no { color: var(--error); }
+  .status-card .value.running { color: var(--warn); }
+
+  /* Section */
+  .section {
+    background: var(--surface); border-radius: 12px; padding: 20px;
+    border: 1px solid var(--border); margin-bottom: 16px;
+  }
+  .section h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 18px; border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 500; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent2); }
+  .btn-danger { background: var(--error); color: #fff; }
+  .btn-outline {
+    background: transparent; color: var(--text2);
+    border: 1px solid var(--border);
+  }
+  .btn-outline:hover { border-color: var(--text2); color: var(--text); }
+  .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Targets */
+  .target-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .target-tag {
+    background: var(--surface2); border: 1px solid var(--border);
+    padding: 4px 12px; border-radius: 20px; font-size: 13px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .target-tag .remove {
+    cursor: pointer; color: var(--text2); font-size: 16px; line-height: 1;
+  }
+  .target-tag .remove:hover { color: var(--error); }
+  .add-target {
+    display: flex; gap: 8px; margin-top: 8px;
+  }
+  .add-target input {
+    flex: 1; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 12px; color: var(--text);
+    font-size: 13px; outline: none;
+  }
+  .add-target input:focus { border-color: var(--accent); }
+
+  /* Message preview */
+  .msg-preview {
+    background: var(--surface2); border-radius: 8px; padding: 12px;
+    font-size: 14px; color: var(--accent2); margin-top: 8px;
+  }
+
+  /* Logs */
+  .logs {
+    background: var(--bg); border-radius: 8px; padding: 12px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px; line-height: 1.8; max-height: 300px;
+    overflow-y: auto; color: var(--text2);
+  }
+  .logs .err { color: var(--error); }
+  .logs .ok { color: var(--success); }
+
+  /* QR Code */
+  .qr-container { text-align: center; margin: 12px 0; }
+  .qr-container img { max-width: 220px; border-radius: 8px; border: 2px solid var(--border); }
+
+  /* Toggle */
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 0;
+  }
+  .toggle-row .label { font-size: 14px; }
+  .toggle {
+    width: 40px; height: 22px; background: var(--border);
+    border-radius: 11px; position: relative; cursor: pointer;
+    transition: background 0.2s;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 18px; height: 18px; background: #fff; border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .toggle.on::after { transform: translateX(18px); }
+
+  /* Schedule */
+  .schedule-body { margin-top: 12px; }
+  .schedule-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .schedule-row label { font-size: 13px; color: var(--text2); min-width: 80px; }
+  .schedule-row input[type="time"] {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 12px; color: var(--text);
+    font-size: 14px; outline: none;
+  }
+  .schedule-row input[type="time"]:focus { border-color: var(--accent); }
+  .day-picker { display: flex; gap: 6px; flex-wrap: wrap; }
+  .day-btn {
+    width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text2); font-size: 12px;
+    cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center;
+  }
+  .day-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .next-run-tip { font-size: 12px; color: var(--text2); margin-top: 8px; }
+  .next-run-tip span { color: var(--accent2); }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--surface2); border: 1px solid var(--border);
+    padding: 10px 24px; border-radius: 8px; font-size: 14px;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100;
+  }
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 600px) {
+    .container { padding: 16px 12px; }
+    .status-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <span class="fire">🔥</span>
+    <div>
+      <h1>抖音续火花</h1>
+      <div class="subtitle">自动给好友发消息，保持火花不断</div>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="status-grid">
+    <div class="status-card">
+      <div class="label">登录状态</div>
+      <div class="value" id="auth-status">—</div>
+    </div>
+    <div class="status-card">
+      <div class="label">目标好友</div>
+      <div class="value" id="targets-count">—</div>
+    </div>
+    <div class="status-card">
+      <div class="label">上次运行</div>
+      <div class="value" id="last-run" style="font-size:13px">—</div>
+    </div>
+    <div class="status-card">
+      <div class="label">运行状态</div>
+      <div class="value" id="run-status">—</div>
+    </div>
+    <div class="status-card">
+      <div class="label">下次定时</div>
+      <div class="value" id="next-run" style="font-size:13px">未启用</div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="section">
+    <h2>⚡ 快捷操作</h2>
+    <div class="btn-group">
+      <button class="btn btn-primary" id="btn-run" onclick="triggerRun()">▶ 立即运行</button>
+      <button class="btn btn-outline" id="btn-setup" onclick="triggerSetup()">🔑 扫码登录</button>
+      <button class="btn btn-outline" onclick="refreshStatus()">↻ 刷新状态</button>
+    </div>
+  </div>
+
+  <!-- Targets -->
+  <div class="section">
+    <h2>👥 续火花目标</h2>
+    <div class="target-list" id="target-list"></div>
+    <div class="add-target">
+      <input type="text" id="new-target" placeholder="输入好友抖音昵称，回车添加" onkeydown="if(event.key==='Enter')addTarget()">
+      <button class="btn btn-outline" onclick="addTarget()">添加</button>
+    </div>
+  </div>
+
+  <!-- Message -->
+  <div class="section">
+    <h2>💬 消息设置</h2>
+    <div class="toggle-row">
+      <span class="label">每日不同风格（防风控）</span>
+      <div class="toggle" id="toggle-style" onclick="toggleDailyStyle()"></div>
+    </div>
+    <div style="margin-top:8px; font-size:13px; color:var(--text2)">今日消息预览：</div>
+    <div class="msg-preview" id="msg-preview">加载中...</div>
+  </div>
+
+  <!-- Schedule -->
+  <div class="section">
+    <h2>⏰ 定时设置</h2>
+    <div class="toggle-row">
+      <span class="label">启用每日自动运行</span>
+      <div class="toggle" id="toggle-schedule" onclick="toggleScheduleEnabled()"></div>
+    </div>
+    <div class="schedule-body" id="schedule-body">
+      <div class="schedule-row">
+        <label>运行时间</label>
+        <input type="time" id="schedule-time" value="08:00">
+      </div>
+      <div class="schedule-row">
+        <label>运行日期</label>
+        <div class="day-picker" id="day-picker"></div>
+      </div>
+      <div class="btn-group" style="margin-top:4px">
+        <button class="btn btn-primary" onclick="saveSchedule()">保存定时</button>
+      </div>
+      <div class="next-run-tip" id="next-run-tip"></div>
+    </div>
+  </div>
+
+  <!-- QR Code (hidden by default) -->
+  <div class="section" id="qr-section" style="display:none">
+    <h2>📱 扫码登录</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:8px">打开抖音 App → 扫一扫 → 扫描下方二维码</p>
+    <div class="qr-container">
+      <img id="qr-img" src="" alt="二维码">
+    </div>
+    <div id="qr-status" style="text-align:center;font-size:13px;color:var(--text2)"></div>
+  </div>
+
+  <!-- Logs -->
+  <div class="section">
+    <h2>📋 运行日志</h2>
+    <div class="logs" id="logs">加载中...</div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';
+let dailyStyle = true;
+let targets = [];
+
+// ── Toast ──
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ── Status ──
+async function refreshStatus() {
+  try {
+    const r = await fetch(API + '/api/status');
+    const d = await r.json();
+
+    const auth = document.getElementById('auth-status');
+    auth.textContent = d.has_auth ? '已登录' : '未登录';
+    auth.className = 'value ' + (d.has_auth ? 'ok' : 'no');
+
+    document.getElementById('targets-count').textContent = d.targets_count || 0;
+    document.getElementById('last-run').textContent = d.last_run || '从未运行';
+
+    const rs = document.getElementById('run-status');
+    if (d.running) {
+      rs.textContent = '运行中...'; rs.className = 'value running';
+    } else {
+      rs.textContent = '空闲'; rs.className = 'value ok';
+    }
+
+    // Setup status
+    if (d.setup_status === 'waiting_scan') {
+      document.getElementById('qr-section').style.display = '';
+      document.getElementById('qr-status').textContent = '等待扫码中...';
+      // Try to load QR image
+      document.getElementById('qr-img').src = API + '/api/qrcode?' + Date.now();
+    } else if (d.setup_status === 'success') {
+      document.getElementById('qr-section').style.display = '';
+      document.getElementById('qr-status').innerHTML = '<span style="color:var(--success)">✅ 登录成功！</span>';
+    } else if (d.setup_status === 'failed') {
+      document.getElementById('qr-section').style.display = '';
+      document.getElementById('qr-status').innerHTML = '<span style="color:var(--error)">❌ 登录失败</span>';
+    }
+
+    document.getElementById('btn-run').disabled = d.running;
+    document.getElementById('btn-setup').disabled = d.setup_status === 'waiting_scan';
+
+    const nextRunEl = document.getElementById('next-run');
+    nextRunEl.textContent = d.next_run || '未启用';
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+// ── Config ──
+async function loadConfig() {
+  try {
+    const r = await fetch(API + '/api/config');
+    const d = await r.json();
+
+    targets = (d.accounts && d.accounts[0] && d.accounts[0].targets) || [];
+    dailyStyle = d.message && d.message.use_daily_style !== false;
+    renderTargets();
+    renderToggle();
+    previewMessage();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderTargets() {
+  const el = document.getElementById('target-list');
+  el.innerHTML = targets.map(t =>
+    `<div class="target-tag"><span>${t}</span><span class="remove" onclick="removeTarget('${t}')">×</span></div>`
+  ).join('');
+}
+
+function renderToggle() {
+  const el = document.getElementById('toggle-style');
+  el.className = 'toggle' + (dailyStyle ? ' on' : '');
+}
+
+async function addTarget() {
+  const input = document.getElementById('new-target');
+  const name = input.value.trim();
+  if (!name) return;
+  if (targets.includes(name)) { toast('已存在'); return; }
+  targets.push(name);
+  await saveTargets();
+  input.value = '';
+  renderTargets();
+  toast('已添加: ' + name);
+  previewMessage();
+}
+
+async function removeTarget(name) {
+  targets = targets.filter(t => t !== name);
+  await saveTargets();
+  renderTargets();
+  toast('已移除: ' + name);
+  previewMessage();
+}
+
+async function saveTargets() {
+  await fetch(API + '/api/targets', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({targets}),
+  });
+}
+
+async function toggleDailyStyle() {
+  dailyStyle = !dailyStyle;
+  renderToggle();
+  await fetch(API + '/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({message: {use_daily_style: dailyStyle}}),
+  });
+  previewMessage();
+}
+
+async function previewMessage() {
+  try {
+    const t = targets.length ? targets[0] : '好友';
+    const r = await fetch(API + '/api/preview-message?target=' + encodeURIComponent(t));
+    const d = await r.json();
+    document.getElementById('msg-preview').textContent = d.message;
+  } catch (e) {
+    document.getElementById('msg-preview').textContent = '预览失败';
+  }
+}
+
+// ── Actions ──
+async function triggerRun() {
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  try {
+    const r = await fetch(API + '/api/run', {method: 'POST'});
+    const d = await r.json();
+    toast(d.ok ? '✅ 任务已启动' : d.error);
+  } catch (e) {
+    toast('请求失败');
+  }
+  setTimeout(refreshStatus, 2000);
+}
+
+async function triggerSetup() {
+  try {
+    const r = await fetch(API + '/api/setup', {method: 'POST'});
+    const d = await r.json();
+    toast(d.ok ? '请在弹出窗口中扫码登录' : d.error);
+    document.getElementById('qr-section').style.display = '';
+    // Poll for QR code
+    setTimeout(() => {
+      document.getElementById('qr-img').src = API + '/api/qrcode?' + Date.now();
+      document.getElementById('qr-status').textContent = '等待扫码中...';
+    }, 3000);
+  } catch (e) {
+    toast('请求失败');
+  }
+}
+
+// ── Schedule ──
+const DAY_LABELS = ['一','二','三','四','五','六','日'];
+let scheduleEnabled = false;
+let scheduleDays = [1,2,3,4,5,6,7];
+
+function renderDayPicker() {
+  const el = document.getElementById('day-picker');
+  el.innerHTML = DAY_LABELS.map((label, i) => {
+    const day = i + 1;
+    const on = scheduleDays.includes(day) ? ' on' : '';
+    return `<div class="day-btn${on}" onclick="toggleDay(${day})" title="周${label}">周${label}</div>`;
+  }).join('');
+}
+
+function toggleDay(day) {
+  if (scheduleDays.includes(day)) {
+    if (scheduleDays.length > 1) scheduleDays = scheduleDays.filter(d => d !== day);
+  } else {
+    scheduleDays.push(day);
+    scheduleDays.sort();
+  }
+  renderDayPicker();
+}
+
+async function loadSchedule() {
+  try {
+    const r = await fetch(API + '/api/schedule');
+    const d = await r.json();
+    scheduleEnabled = d.enabled || false;
+    scheduleDays = d.days || [1,2,3,4,5,6,7];
+    document.getElementById('schedule-time').value = d.time || '08:00';
+    document.getElementById('toggle-schedule').className = 'toggle' + (scheduleEnabled ? ' on' : '');
+    renderDayPicker();
+    if (d.next_run) {
+      document.getElementById('next-run-tip').innerHTML = '下次运行：<span>' + d.next_run + '</span>';
+      document.getElementById('next-run').textContent = d.next_run;
+    }
+  } catch (e) { console.error(e); }
+}
+
+function toggleScheduleEnabled() {
+  scheduleEnabled = !scheduleEnabled;
+  document.getElementById('toggle-schedule').className = 'toggle' + (scheduleEnabled ? ' on' : '');
+}
+
+async function saveSchedule() {
+  const time = document.getElementById('schedule-time').value || '08:00';
+  try {
+    const r = await fetch(API + '/api/schedule', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: scheduleEnabled, time, days: scheduleDays}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      toast(scheduleEnabled ? ('✅ 已设置，下次运行：' + (d.next_run || '—')) : '✅ 已关闭自动运行');
+      if (d.next_run) {
+        document.getElementById('next-run-tip').innerHTML = '下次运行：<span>' + d.next_run + '</span>';
+        document.getElementById('next-run').textContent = d.next_run;
+      } else {
+        document.getElementById('next-run-tip').textContent = '';
+        document.getElementById('next-run').textContent = '未启用';
+      }
+    }
+  } catch (e) { toast('保存失败'); }
+}
+
+// ── Logs ──
+async function loadLogs() {
+  try {
+    const r = await fetch(API + '/api/logs?n=40');
+    const d = await r.json();
+    const el = document.getElementById('logs');
+    el.innerHTML = d.logs.map(l => {
+      let cls = '';
+      if (l.includes('ERROR') || l.includes('❌')) cls = 'err';
+      else if (l.includes('✅') || l.includes('成功')) cls = 'ok';
+      return `<div class="${cls}">${escHtml(l)}</div>`;
+    }).join('');
+    el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    document.getElementById('logs').textContent = '加载失败';
+  }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Init ──
+refreshStatus();
+loadConfig();
+loadSchedule();
+loadLogs();
+
+// Auto refresh
+setInterval(() => { refreshStatus(); loadLogs(); }, 10000);
+</script>
+</body>
+</html>

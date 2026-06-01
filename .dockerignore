@@ -1,0 +1,9 @@
+__pycache__
+*.pyc
+*.pyo
+.git
+logs/
+auth/state.json
+auth/qrcode.png
+*.egg-info
+.venv

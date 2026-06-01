@@ -1,0 +1,31 @@
+# 登录态与浏览器数据（含账号凭证，绝不提交）
+auth/state.json
+auth/browser_data/
+auth/qrcode.png
+auth/login_page_debug.html
+auth/login_page_debug.png
+
+# 用户个人配置（含好友昵称、账号信息）
+config/settings.yaml
+
+# 日志
+logs/
+
+# Python 虚拟环境
+.venv/
+
+# Python 编译缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS 元数据
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 编辑器
+.idea/
+.vscode/
+*.swp

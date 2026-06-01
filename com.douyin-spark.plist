@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.douyin-spark</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>PLACEHOLDER_PYTHON</string>
+        <string>PLACEHOLDER_APP</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>5001</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>PLACEHOLDER_DIR</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>PLACEHOLDER_DIR/logs/launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>PLACEHOLDER_DIR/logs/launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TZ</key>
+        <string>Asia/Shanghai</string>
+        <key>PATH</key>
+        <string>PLACEHOLDER_PATH</string>
+    </dict>
+</dict>
+</plist>
