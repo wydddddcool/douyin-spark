@@ -1,8 +1,11 @@
 """核心任务 — 导航聊天页 → 查找好友 → 发送消息"""
 
+import os
 import platform
 import time
 from playwright.sync_api import Page, BrowserContext
+
+from utils.paths import AUTH_DIR
 
 _SELECT_ALL = "Meta+a" if platform.system() == "Darwin" else "Control+a"
 
@@ -168,7 +171,7 @@ def _do_send(page: Page, target: str, cfg: dict) -> bool:
 
     if not input_el:
         logger.warning("   ❌ 未找到输入框 (好友: %s)", target)
-        page.screenshot(path="auth/debug_no_input.png")
+        page.screenshot(path=os.path.join(AUTH_DIR, "debug_no_input.png"))
         return False
 
     try:
@@ -190,7 +193,7 @@ def _do_send(page: Page, target: str, cfg: dict) -> bool:
 
     except Exception as e:
         logger.warning("   ❌ 发送失败 (%s): %s", target, e)
-        page.screenshot(path="auth/debug_send_fail.png")
+        page.screenshot(path=os.path.join(AUTH_DIR, "debug_send_fail.png"))
         return False
 
 

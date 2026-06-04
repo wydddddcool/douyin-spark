@@ -8,8 +8,7 @@ from playwright.sync_api import (
     BrowserContext,
 )
 
-# 用户数据目录（持久化浏览器状态，更像真人）
-USER_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "auth", "browser_data")
+from utils.paths import BROWSER_DATA_DIR as USER_DATA_DIR
 
 # 更新的 User-Agent
 UA = (
@@ -20,8 +19,13 @@ UA = (
 
 
 def get_browser(p: Playwright, headless: bool = True) -> Browser:
-    """启动 Chromium 浏览器（无持久化）"""
+    """启动浏览器（无持久化）— 用系统 Chrome 而非 Playwright 内置 Chromium
+
+    原因：1) 打包后内置 Chromium 不在 bundle 里，frozen 模式必崩；
+    2) 抖音对 Playwright 内置 Chromium 触发人机验证，系统 Chrome 不会。
+    """
     return p.chromium.launch(
+        channel="chrome",
         headless=headless,
         args=[
             "--disable-blink-features=AutomationControlled",

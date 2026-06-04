@@ -5,7 +5,7 @@ import os
 import sys
 from datetime import datetime
 
-LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+from utils.paths import LOG_DIR
 
 
 def setup_logger(name: str = "douyin-spark") -> logging.Logger:

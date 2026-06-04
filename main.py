@@ -17,10 +17,16 @@ from core.browser import get_browser, create_context, create_persistent_context
 from core.auth import wait_for_qrcode_and_login
 from core.tasks import run_tasks
 from utils.logger import setup_logger
+from utils.paths import (
+    CONFIG_PATH,
+    STATE_PATH,
+    AUTH_DIR,
+    DATA_DIR,
+    ensure_user_dirs,
+    ensure_default_config,
+)
 
 logger = setup_logger("main")
-
-CONFIG_PATH = "config/settings.yaml"
 
 
 def load_config(path: str) -> dict:
@@ -47,7 +53,9 @@ def cmd_setup(cfg: dict):
     """--setup 模式：扫码登录（使用持久化浏览器上下文，更像真人）"""
     accounts = cfg["accounts"]
     account = accounts[0]
-    state_path = account.get("state_file", "auth/state.json")
+    state_path = account.get("state_file", STATE_PATH)
+    if not os.path.isabs(state_path):
+        state_path = os.path.join(DATA_DIR, state_path)
 
     logger.info("=" * 40)
     logger.info("抖音续火花 — 首次配置")
@@ -77,7 +85,9 @@ def cmd_run(cfg: dict):
 
     for account in accounts:
         name = account.get("name", "未命名")
-        state_path = account.get("state_file", "auth/state.json")
+        state_path = account.get("state_file", STATE_PATH)
+        if not os.path.isabs(state_path):
+            state_path = os.path.join(DATA_DIR, state_path)
 
         if not os.path.exists(state_path):
             logger.error("[%s] 登录凭证不存在，请先运行: python main.py --setup", name)
@@ -114,10 +124,11 @@ def main():
     parser.add_argument("--setup", action="store_true", help="首次扫码登录配置")
     args = parser.parse_args()
 
-    cfg = load_config(CONFIG_PATH)
+    # 确保用户数据目录存在，并在首次运行时复制默认配置
+    ensure_user_dirs()
+    ensure_default_config()
 
-    # 确保 auth 目录存在
-    os.makedirs("auth", exist_ok=True)
+    cfg = load_config(CONFIG_PATH)
 
     if args.setup:
         cmd_setup(cfg)

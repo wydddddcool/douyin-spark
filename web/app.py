@@ -10,15 +10,28 @@ from flask import Flask, jsonify, render_template, request, send_file
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-# 把项目根目录加入 path
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT_DIR)
+# dev 模式：确保项目根目录在 sys.path 中，frozen 模式 PyInstaller 已自动处理
+if not getattr(sys, 'frozen', False):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+from utils.paths import (
+    CONFIG_PATH,
+    AUTH_DIR,
+    LOG_DIR,
+    WEB_TEMPLATES_DIR,
+    WEB_STATIC_DIR,
+    DATA_DIR,
+)
+from utils.logger import setup_logger
 
-CONFIG_PATH = os.path.join(ROOT_DIR, "config", "settings.yaml")
-AUTH_DIR = os.path.join(ROOT_DIR, "auth")
-LOG_DIR = os.path.join(ROOT_DIR, "logs")
+logger = setup_logger("web")
+
+# 模板和静态文件使用 paths 模块统一管理（frozen 走 _MEIPASS/web/，dev 走 项目根/web/）
+app = Flask(
+    __name__,
+    template_folder=WEB_TEMPLATES_DIR,
+    static_folder=WEB_STATIC_DIR,
+)
 
 # 全局状态
 _runtime = {
@@ -55,7 +68,7 @@ def _has_auth() -> bool:
     cfg = _load_config()
     for account in cfg.get("accounts", []):
         state_file = account.get("state_file", "auth/state.json")
-        full_path = os.path.join(ROOT_DIR, state_file) if not os.path.isabs(state_file) else state_file
+        full_path = os.path.join(DATA_DIR, state_file) if not os.path.isabs(state_file) else state_file
         if os.path.exists(full_path):
             return True
     return False
@@ -128,6 +141,10 @@ def _run_spark_task():
     _runtime["running"] = True
     _runtime["last_result"] = None
 
+    logger.info("=" * 40)
+    logger.info("手动触发：开始执行续火花任务")
+    logger.info("=" * 40)
+
     try:
         from core.browser import get_browser, create_context
         from core.tasks import run_tasks
@@ -143,7 +160,7 @@ def _run_spark_task():
                 name = account.get("name", "未命名")
                 state_path = account.get("state_file", "auth/state.json")
                 full_state = (
-                    os.path.join(ROOT_DIR, state_path)
+                    os.path.join(DATA_DIR, state_path)
                     if not os.path.isabs(state_path)
                     else state_path
                 )
@@ -167,8 +184,11 @@ def _run_spark_task():
 
         _runtime["last_result"] = results
         _runtime["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.info("任务完成，结果: %s", results)
 
     except Exception as e:
+        import traceback
+        logger.error("任务执行异常: %s\n%s", e, traceback.format_exc())
         _runtime["last_result"] = [{"account": "error", "status": "error", "error": str(e)}]
         _runtime["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     finally:
@@ -189,7 +209,7 @@ def _run_setup_task():
         account = cfg["accounts"][0]
         state_path = account.get("state_file", "auth/state.json")
         full_state = (
-            os.path.join(ROOT_DIR, state_path)
+            os.path.join(DATA_DIR, state_path)
             if not os.path.isabs(state_path)
             else state_path
         )
@@ -372,7 +392,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="抖音续火花 — 控制面板")
-    parser.add_argument("--port", type=int, default=5000, help="端口号")
+    parser.add_argument("--port", type=int, default=5733, help="端口号")
     parser.add_argument("--host", default="0.0.0.0", help="监听地址")
     args = parser.parse_args()
 

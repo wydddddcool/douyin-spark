@@ -4,11 +4,11 @@ import os
 from playwright.sync_api import Page, BrowserContext
 
 from utils.logger import setup_logger
+from utils.paths import AUTH_DIR, QRCODE_PATH
 
 logger = setup_logger("auth")
 
 CHAT_URL = "https://www.douyin.com/chat"
-QRCODE_PATH = "auth/qrcode.png"
 
 
 def is_logged_in(page: Page, save_debug: bool = False) -> bool:
@@ -47,7 +47,7 @@ def is_logged_in(page: Page, save_debug: bool = False) -> bool:
     # 未检测到会话列表，保存调试截图
     if save_debug:
         try:
-            page.screenshot(path="auth/debug_login_check.png")
+            page.screenshot(path=os.path.join(AUTH_DIR, "debug_login_check.png"))
             logger.info("调试截图已保存: auth/debug_login_check.png")
             logger.info("当前 URL: %s | 标题: %s", page.url, page.title())
         except Exception:
@@ -150,9 +150,9 @@ def wait_for_qrcode_and_login(
 
     if not qr_found:
         logger.error("找不到二维码")
-        page.screenshot(path="auth/login_page_debug.png")
+        page.screenshot(path=os.path.join(AUTH_DIR, "login_page_debug.png"))
         try:
-            with open("auth/login_page_debug.html", "w", encoding="utf-8") as f:
+            with open(os.path.join(AUTH_DIR, "login_page_debug.html"), "w", encoding="utf-8") as f:
                 f.write(page.content())
             logger.info("调试信息已保存: auth/login_page_debug.png + .html")
         except Exception:
