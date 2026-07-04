@@ -2,6 +2,7 @@
 
 import os
 import platform
+import random
 import time
 from playwright.sync_api import Page, BrowserContext
 
@@ -9,7 +10,7 @@ from utils.paths import AUTH_DIR
 
 _SELECT_ALL = "Meta+a" if platform.system() == "Darwin" else "Control+a"
 
-from core.message import build_message
+from core.message import compose_message, record_sent
 from utils.logger import setup_logger
 
 logger = setup_logger("tasks")
@@ -119,7 +120,8 @@ def find_and_send(page: Page, targets: list[str], cfg: dict, state_path: str) ->
                 if _do_send(page, target, cfg):
                     sent.append(target)
                 not_found.remove(target)
-                time.sleep(2)
+                # 好友间随机间隔，更像真人操作
+                time.sleep(random.uniform(2, 6))
 
         if not not_found:
             break
@@ -142,11 +144,7 @@ def find_and_send(page: Page, targets: list[str], cfg: dict, state_path: str) ->
 
 def _do_send(page: Page, target: str, cfg: dict) -> bool:
     """在已点击会话的状态下发送消息"""
-    msg = build_message(
-        target=target,
-        template=cfg.get("template"),
-        use_daily_style=cfg.get("use_daily_style", True),
-    )
+    msg = compose_message(target, cfg)
     logger.info("   准备发送 -> %s: %s", target, msg)
 
     # 查找输入框：优先找 contenteditable，避免匹配到外层容器 div
@@ -182,13 +180,15 @@ def _do_send(page: Page, target: str, cfg: dict) -> bool:
         page.keyboard.press(_SELECT_ALL)
         page.keyboard.press("Backspace")
         page.wait_for_timeout(300)
-        input_el.type(msg, delay=50)
+        # 随机打字速度，更像真人
+        input_el.type(msg, delay=random.randint(30, 80))
 
         # 发送（Enter）
         page.keyboard.press("Enter")
         page.wait_for_timeout(2000)
 
         logger.info("   ✅ 消息已发送 -> %s", target)
+        record_sent(msg)
         return True
 
     except Exception as e:

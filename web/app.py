@@ -1,5 +1,6 @@
 """Web 控制面板 — Flask 后端"""
 
+import copy
 import os
 import sys
 import threading
@@ -40,6 +41,9 @@ _runtime = {
     "last_run": None,
     "setup_status": None,  # None / "waiting_scan" / "success" / "failed"
     "setup_thread": None,
+    "friends_fetching": False,  # 是否正在拉取好友列表
+    "friends_cache": None,      # 上次拉取的好友列表缓存
+    "friends_cache_at": None,   # 缓存时间
 }
 
 # 定时调度器（单例）
@@ -116,15 +120,25 @@ def _apply_schedule():
     days = sched_cfg.get("days", list(range(1, 8)))
     dow = ",".join(str(d - 1) for d in days)
 
+    # 随机浮动：触发时间在设定点 ±N 分钟内随机，避免每天分秒不差
+    try:
+        jitter_minutes = int(sched_cfg.get("jitter_minutes", 5))
+    except (ValueError, TypeError):
+        jitter_minutes = 5
+    jitter = jitter_minutes * 60 if jitter_minutes > 0 else None
+
     _scheduler.add_job(
         _run_spark_task,
-        CronTrigger(day_of_week=dow, hour=hour, minute=minute, timezone="Asia/Shanghai"),
+        CronTrigger(
+            day_of_week=dow, hour=hour, minute=minute,
+            timezone="Asia/Shanghai", jitter=jitter,
+        ),
         id=_SPARK_JOB_ID,
         replace_existing=True,
     )
 
 
-def _next_run_time() -> str | None:
+def _next_run_time():
     """返回下次定时运行时间的字符串，未配置则返回 None"""
     job = _scheduler.get_job(_SPARK_JOB_ID)
     if job and job.next_run_time:
@@ -256,10 +270,26 @@ def api_status():
     )
 
 
+def _mask_key(key: str) -> str:
+    """API key 打码：只露末 4 位"""
+    if not key:
+        return ""
+    return "***" + key[-4:] if len(key) > 4 else "***"
+
+
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
+    from utils.secrets import decrypt, is_encrypted
+
     cfg = _load_config()
-    # 不暴露敏感信息
+    # 不暴露敏感信息：api_key 返回打码值 + 是否已加密标记
+    message = copy.deepcopy(cfg.get("message", {}))
+    for provider in message.get("ai", {}).get("providers", []):
+        stored_key = provider.get("api_key", "")
+        if stored_key:
+            plain = decrypt(stored_key)  # 加密的解密，明文直接返回
+            provider["api_key"] = _mask_key(plain)
+            provider["api_key_encrypted"] = is_encrypted(stored_key)
     safe_cfg = {
         "accounts": [
             {
@@ -268,7 +298,7 @@ def api_get_config():
             }
             for a in cfg.get("accounts", [])
         ],
-        "message": cfg.get("message", {}),
+        "message": message,
         "runtime": cfg.get("runtime", {}),
     }
     return jsonify(safe_cfg)
@@ -276,6 +306,8 @@ def api_get_config():
 
 @app.route("/api/config", methods=["POST"])
 def api_save_config():
+    from utils.secrets import encrypt, is_encrypted
+
     data = request.json
     cfg = _load_config()
 
@@ -288,7 +320,37 @@ def api_save_config():
                     cfg["accounts"][i]["name"] = acc["name"]
 
     if "message" in data:
-        cfg["message"] = data["message"]
+        # 浅合并而非整段覆盖——避免前端只发一个开关就把 template/ai 配置抹掉
+        incoming = dict(data["message"])
+        msg_cfg = cfg.setdefault("message", {})
+
+        if "ai" in incoming:
+            ai_incoming = incoming.pop("ai") or {}
+            ai_cfg = msg_cfg.setdefault("ai", {})
+            if "enabled" in ai_incoming:
+                ai_cfg["enabled"] = bool(ai_incoming["enabled"])
+            if "providers" in ai_incoming:
+                # 处理 api_key：
+                # - "***xxxx" 打码值 → 前端没改 key，保留原值
+                # - 新明文 → 加密后存储
+                # - 已是 enc: 前缀 → 幂等
+                old_by_name = {
+                    p.get("name"): p for p in ai_cfg.get("providers", [])
+                }
+                for p in ai_incoming["providers"]:
+                    key = p.get("api_key", "")
+                    name = p.get("name")
+                    if key.startswith("***"):
+                        # 前端没改 key，保留原值
+                        if name in old_by_name:
+                            p["api_key"] = old_by_name[name].get("api_key", "")
+                    elif key and not is_encrypted(key):
+                        # 用户填了新明文 key → 加密存储
+                        p["api_key"] = encrypt(key)
+                    # 已是 enc: 前缀的保持不变
+                ai_cfg["providers"] = ai_incoming["providers"]
+
+        msg_cfg.update(incoming)
 
     _save_config(cfg)
     return jsonify({"ok": True})
@@ -340,6 +402,102 @@ def api_qrcode():
     return "", 404
 
 
+# ─── 好友列表（可视化勾选） ────────────────────────────────────
+
+
+def _resolve_state_path():
+    """返回第一个账号的 state.json 绝对路径，没有返回 None"""
+    cfg = _load_config()
+    accounts = cfg.get("accounts", [])
+    if not accounts:
+        return None
+    state_path = accounts[0].get("state_file", "auth/state.json")
+    if not os.path.isabs(state_path):
+        state_path = os.path.join(DATA_DIR, state_path)
+    return state_path if os.path.exists(state_path) else None
+
+
+def _run_fetch_friends_task():
+    """后台拉取好友列表（开浏览器抓会话列表）"""
+    global _runtime
+    _runtime["friends_fetching"] = True
+
+    try:
+        from core.friends import fetch_friends_with_state
+
+        state_path = _resolve_state_path()
+        if not state_path:
+            logger.warning("拉取好友列表失败：未登录")
+            _runtime["friends_cache"] = []
+            _runtime["friends_cache_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return
+
+        items = fetch_friends_with_state(state_path, headless=True)
+        _runtime["friends_cache"] = items
+        _runtime["friends_cache_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.info("好友列表已缓存：%d 位", len(items))
+    except Exception as e:
+        import traceback
+        logger.error("拉取好友列表异常: %s\n%s", e, traceback.format_exc())
+        _runtime["friends_cache"] = []
+        _runtime["friends_cache_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    finally:
+        _runtime["friends_fetching"] = False
+
+
+@app.route("/api/friends", methods=["GET"])
+def api_get_friends():
+    """返回好友列表缓存（不触发拉取，由前端显式调用 refresh）"""
+    cfg = _load_config()
+    targets = set()
+    if cfg.get("accounts"):
+        targets = set(cfg["accounts"][0].get("targets", []))
+
+    friends = _runtime.get("friends_cache") or []
+    # 标注哪些已被选为续火花目标
+    marked = [
+        {**f, "selected": f.get("name") in targets}
+        for f in friends
+    ]
+    return jsonify({
+        "friends": marked,
+        "fetching": _runtime.get("friends_fetching", False),
+        "cache_at": _runtime.get("friends_cache_at"),
+        "has_auth": _resolve_state_path() is not None,
+    })
+
+
+@app.route("/api/friends/refresh", methods=["POST"])
+def api_refresh_friends():
+    """触发后台拉取好友列表"""
+    if _runtime.get("friends_fetching"):
+        return jsonify({"ok": False, "error": "正在拉取中，请稍候"})
+
+    if not _resolve_state_path():
+        return jsonify({"ok": False, "error": "请先扫码登录"}), 400
+
+    t = threading.Thread(target=_run_fetch_friends_task, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "message": "开始拉取好友列表，约 15-30 秒"})
+
+
+@app.route("/api/friends/select", methods=["POST"])
+def api_select_friends():
+    """批量设置续火花目标（覆盖现有）"""
+    data = request.json or {}
+    names = data.get("targets", [])
+    if not isinstance(names, list):
+        return jsonify({"ok": False, "error": "targets 必须是数组"}), 400
+
+    cfg = _load_config()
+    if not cfg.get("accounts"):
+        return jsonify({"ok": False, "error": "没有账号配置"}), 400
+
+    cfg["accounts"][0]["targets"] = [str(n).strip() for n in names if str(n).strip()]
+    _save_config(cfg)
+    return jsonify({"ok": True, "count": len(cfg["accounts"][0]["targets"])})
+
+
 @app.route("/api/logs")
 def api_logs():
     n = request.args.get("n", 50, type=int)
@@ -351,6 +509,7 @@ def api_get_schedule():
     """获取定时配置"""
     cfg = _load_config()
     sched_cfg = cfg.get("schedule", {"enabled": False, "time": "08:00", "days": list(range(1, 8))})
+    sched_cfg.setdefault("jitter_minutes", 5)
     return jsonify({**sched_cfg, "next_run": _next_run_time()})
 
 
@@ -359,10 +518,15 @@ def api_save_schedule():
     """保存定时配置并立即更新调度器"""
     data = request.json
     cfg = _load_config()
+    try:
+        jitter_minutes = max(0, min(60, int(data.get("jitter_minutes", 5))))
+    except (ValueError, TypeError):
+        jitter_minutes = 5
     cfg["schedule"] = {
         "enabled": bool(data.get("enabled", False)),
         "time": data.get("time", "08:00"),
         "days": data.get("days", list(range(1, 8))),
+        "jitter_minutes": jitter_minutes,
     }
     _save_config(cfg)
     _apply_schedule()
@@ -392,12 +556,19 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="抖音续火花 — 控制面板")
-    parser.add_argument("--port", type=int, default=5733, help="端口号")
+    parser.add_argument("--port", type=int, default=5001, help="端口号")
     parser.add_argument("--host", default="0.0.0.0", help="监听地址")
     args = parser.parse_args()
 
     os.makedirs(AUTH_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
+
+    # 写入实际端口文件，让打开控制面板脚本可以读取
+    try:
+        with open(os.path.join(AUTH_DIR, "web_port.txt"), "w", encoding="utf-8") as f:
+            f.write(str(args.port))
+    except Exception:
+        pass
 
     # 启动调度器并应用配置中的定时任务
     _scheduler.start()

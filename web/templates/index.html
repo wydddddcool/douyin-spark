@@ -118,6 +118,45 @@
   .qr-container { text-align: center; margin: 12px 0; }
   .qr-container img { max-width: 220px; border-radius: 8px; border: 2px solid var(--border); }
 
+  /* Friends List */
+  .friends-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px; max-height: 360px; overflow-y: auto;
+  }
+  .friend-card {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--surface2); border: 1px solid var(--border);
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .friend-card:hover { border-color: var(--accent2); }
+  .friend-card.selected { border-color: var(--accent); background: rgba(108,92,231,0.12); }
+  .friend-card .avatar {
+    width: 36px; height: 36px; border-radius: 50%; background: var(--border);
+    object-fit: cover; flex-shrink: 0;
+  }
+  .friend-card .info { flex: 1; min-width: 0; }
+  .friend-card .name {
+    font-size: 13px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .friend-card .fire { font-size: 11px; color: var(--fire); margin-top: 2px; }
+  .friend-card .checkbox {
+    width: 16px; height: 16px; border-radius: 4px;
+    border: 1.5px solid var(--border); flex-shrink: 0;
+    position: relative;
+  }
+  .friend-card.selected .checkbox {
+    background: var(--accent); border-color: var(--accent);
+  }
+  .friend-card.selected .checkbox::after {
+    content: '✓'; color: #fff; font-size: 11px; font-weight: bold;
+    position: absolute; top: -1px; left: 2px;
+  }
+  .friends-empty {
+    color: var(--text2); font-size: 13px; padding: 16px; text-align: center;
+  }
+
   /* Toggle */
   .toggle-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -141,12 +180,16 @@
   .schedule-body { margin-top: 12px; }
   .schedule-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
   .schedule-row label { font-size: 13px; color: var(--text2); min-width: 80px; }
-  .schedule-row input[type="time"] {
+  .schedule-row input[type="time"],
+  .schedule-row input[type="number"] {
     background: var(--surface2); border: 1px solid var(--border);
     border-radius: 8px; padding: 6px 12px; color: var(--text);
     font-size: 14px; outline: none;
   }
-  .schedule-row input[type="time"]:focus { border-color: var(--accent); }
+  .schedule-row input[type="number"] { width: 70px; }
+  .schedule-row input[type="time"]:focus,
+  .schedule-row input[type="number"]:focus { border-color: var(--accent); }
+  .schedule-row .row-tip { font-size: 12px; color: var(--text2); }
   .day-picker { display: flex; gap: 6px; flex-wrap: wrap; }
   .day-btn {
     width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border);
@@ -218,9 +261,21 @@
     </div>
   </div>
 
+  <!-- Friends List -->
+  <div class="section">
+    <h2>👥 好友列表 <span style="font-size:12px;color:var(--text2);font-weight:normal">勾选要续火花的好友</span></h2>
+    <div class="btn-group" style="margin-bottom:12px">
+      <button class="btn btn-outline" id="btn-refresh-friends" onclick="refreshFriends()">🔄 从抖音拉取好友列表</button>
+      <span style="font-size:12px;color:var(--text2);align-self:center" id="friends-cache-info"></span>
+    </div>
+    <div id="friends-list" class="friends-grid">
+      <div class="friends-empty">点击上方按钮，从抖音聊天列表同步好友（含火花天数）<br>勾选后自动保存为续火花目标</div>
+    </div>
+  </div>
+
   <!-- Targets -->
   <div class="section">
-    <h2>👥 续火花目标</h2>
+    <h2>📝 续火花目标 <span style="font-size:12px;color:var(--text2);font-weight:normal">手动添加不在好友列表中的昵称</span></h2>
     <div class="target-list" id="target-list"></div>
     <div class="add-target">
       <input type="text" id="new-target" placeholder="输入好友抖音昵称，回车添加" onkeydown="if(event.key==='Enter')addTarget()">
@@ -232,10 +287,14 @@
   <div class="section">
     <h2>💬 消息设置</h2>
     <div class="toggle-row">
-      <span class="label">每日不同风格（防风控）</span>
+      <span class="label">随机消息池（每天不重样，防风控）</span>
       <div class="toggle" id="toggle-style" onclick="toggleDailyStyle()"></div>
     </div>
-    <div style="margin-top:8px; font-size:13px; color:var(--text2)">今日消息预览：</div>
+    <div class="toggle-row">
+      <span class="label">AI 生成消息（需在配置文件填好 key，失败自动退回消息池）</span>
+      <div class="toggle" id="toggle-ai" onclick="toggleAiEnabled()"></div>
+    </div>
+    <div style="margin-top:8px; font-size:13px; color:var(--text2)">消息示例（实际发送时随机）：</div>
     <div class="msg-preview" id="msg-preview">加载中...</div>
   </div>
 
@@ -250,6 +309,11 @@
       <div class="schedule-row">
         <label>运行时间</label>
         <input type="time" id="schedule-time" value="08:00">
+      </div>
+      <div class="schedule-row">
+        <label>随机浮动</label>
+        <input type="number" id="schedule-jitter" min="0" max="60" step="1" value="5">
+        <span class="row-tip">分钟 — 实际发送在设定时间 ± 此范围内随机，更像真人（0 = 准点）</span>
       </div>
       <div class="schedule-row">
         <label>运行日期</label>
@@ -270,6 +334,9 @@
       <img id="qr-img" src="" alt="二维码">
     </div>
     <div id="qr-status" style="text-align:center;font-size:13px;color:var(--text2)"></div>
+    <p style="font-size:12px;color:var(--text2);margin-top:12px;text-align:center">
+      💡 浏览器弹窗无法扫码？命令行运行：<code style="background:var(--surface2);padding:2px 6px;border-radius:4px">python main.py --setup</code>
+    </p>
   </div>
 
   <!-- Logs -->
@@ -347,8 +414,10 @@ async function loadConfig() {
 
     targets = (d.accounts && d.accounts[0] && d.accounts[0].targets) || [];
     dailyStyle = d.message && d.message.use_daily_style !== false;
+    aiEnabled = !!(d.message && d.message.ai && d.message.ai.enabled);
     renderTargets();
     renderToggle();
+    renderAiToggle();
     previewMessage();
   } catch (e) {
     console.error(e);
@@ -407,6 +476,24 @@ async function toggleDailyStyle() {
   previewMessage();
 }
 
+let aiEnabled = false;
+
+function renderAiToggle() {
+  const el = document.getElementById('toggle-ai');
+  el.className = 'toggle' + (aiEnabled ? ' on' : '');
+}
+
+async function toggleAiEnabled() {
+  aiEnabled = !aiEnabled;
+  renderAiToggle();
+  await fetch(API + '/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({message: {ai: {enabled: aiEnabled}}}),
+  });
+  toast(aiEnabled ? '✅ AI 生成已开启（发送时生效）' : '已关闭 AI，使用本地消息池');
+}
+
 async function previewMessage() {
   try {
     const t = targets.length ? targets[0] : '好友';
@@ -453,6 +540,117 @@ const DAY_LABELS = ['一','二','三','四','五','六','日'];
 let scheduleEnabled = false;
 let scheduleDays = [1,2,3,4,5,6,7];
 
+// ── Friends List ──
+let friends = [];
+let friendsPollTimer = null;
+
+async function refreshFriends() {
+  const btn = document.getElementById('btn-refresh-friends');
+  btn.disabled = true;
+  try {
+    const r = await fetch(API + '/api/friends/refresh', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      toast('🔄 正在后台拉取好友列表...');
+      startFriendsPolling();
+    } else {
+      toast(d.error || '拉取失败');
+      btn.disabled = false;
+    }
+  } catch (e) {
+    toast('请求失败');
+    btn.disabled = false;
+  }
+}
+
+function startFriendsPolling() {
+  if (friendsPollTimer) clearInterval(friendsPollTimer);
+  friendsPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch(API + '/api/friends');
+      const d = await r.json();
+      friends = d.friends || [];
+      renderFriends(d);
+      if (!d.fetching) {
+        clearInterval(friendsPollTimer);
+        friendsPollTimer = null;
+        document.getElementById('btn-refresh-friends').disabled = false;
+        if (friends.length > 0) {
+          toast(`✅ 拉取到 ${friends.length} 位好友`);
+        } else {
+          toast('未拉取到好友，可能登录已过期');
+        }
+      }
+    } catch (e) { console.error(e); }
+  }, 2000);
+}
+
+async function loadFriends() {
+  try {
+    const r = await fetch(API + '/api/friends');
+    const d = await r.json();
+    friends = d.friends || [];
+    renderFriends(d);
+    if (d.fetching) startFriendsPolling();
+  } catch (e) { console.error(e); }
+}
+
+function renderFriends(d) {
+  const el = document.getElementById('friends-list');
+  if (!friends.length) {
+    el.innerHTML = `<div class="friends-empty">${
+      d && d.has_auth === false
+        ? '请先扫码登录，再拉取好友列表'
+        : '暂无好友数据，点上方按钮从抖音同步'
+    }</div>`;
+  } else {
+    el.innerHTML = friends.map((f, i) => `
+      <div class="friend-card${f.selected ? ' selected' : ''}" onclick="toggleFriend(${i})">
+        <img class="avatar" src="${f.avatar || ''}" onerror="this.style.visibility='hidden'">
+        <div class="info">
+          <div class="name">${escHtml(f.name)}</div>
+          ${f.fire ? `<div class="fire">🔥 ${escHtml(f.fire)}</div>` : ''}
+        </div>
+        <div class="checkbox"></div>
+      </div>
+    `).join('');
+  }
+  const info = document.getElementById('friends-cache-info');
+  if (d && d.fetching) {
+    info.textContent = '⏳ 正在拉取...';
+  } else if (d && d.cache_at) {
+    info.textContent = `已缓存 ${friends.length} 位 · ${d.cache_at}`;
+  } else {
+    info.textContent = '';
+  }
+}
+
+async function toggleFriend(i) {
+  const f = friends[i];
+  f.selected = !f.selected;
+  const selected = friends.filter(x => x.selected).map(x => x.name);
+  try {
+    await fetch(API + '/api/friends/select', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({targets: selected}),
+    });
+    // 同步本地 targets 状态
+    targets = selected;
+    renderTargets();
+    previewMessage();
+    refreshStatus();
+    // 只更新勾选样式，不重渲染整个列表（避免闪烁）
+    const cards = document.querySelectorAll('#friends-list .friend-card');
+    if (cards[i]) {
+      cards[i].classList.toggle('selected', f.selected);
+    }
+  } catch (e) {
+    toast('保存失败');
+    f.selected = !f.selected;  // 回滚
+  }
+}
+
 function renderDayPicker() {
   const el = document.getElementById('day-picker');
   el.innerHTML = DAY_LABELS.map((label, i) => {
@@ -479,10 +677,13 @@ async function loadSchedule() {
     scheduleEnabled = d.enabled || false;
     scheduleDays = d.days || [1,2,3,4,5,6,7];
     document.getElementById('schedule-time').value = d.time || '08:00';
+    document.getElementById('schedule-jitter').value = (d.jitter_minutes !== undefined && d.jitter_minutes !== null) ? d.jitter_minutes : 5;
     document.getElementById('toggle-schedule').className = 'toggle' + (scheduleEnabled ? ' on' : '');
     renderDayPicker();
     if (d.next_run) {
-      document.getElementById('next-run-tip').innerHTML = '下次运行：<span>' + d.next_run + '</span>';
+      const jit = parseInt(document.getElementById('schedule-jitter').value) || 0;
+      const tip = d.next_run + (jit > 0 ? '（±' + jit + ' 分钟内随机）' : '');
+      document.getElementById('next-run-tip').innerHTML = '下次运行：<span>' + tip + '</span>';
       document.getElementById('next-run').textContent = d.next_run;
     }
   } catch (e) { console.error(e); }
@@ -495,17 +696,19 @@ function toggleScheduleEnabled() {
 
 async function saveSchedule() {
   const time = document.getElementById('schedule-time').value || '08:00';
+  const jitter = Math.max(0, Math.min(60, parseInt(document.getElementById('schedule-jitter').value) || 0));
   try {
     const r = await fetch(API + '/api/schedule', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({enabled: scheduleEnabled, time, days: scheduleDays}),
+      body: JSON.stringify({enabled: scheduleEnabled, time, days: scheduleDays, jitter_minutes: jitter}),
     });
     const d = await r.json();
     if (d.ok) {
       toast(scheduleEnabled ? ('✅ 已设置，下次运行：' + (d.next_run || '—')) : '✅ 已关闭自动运行');
       if (d.next_run) {
-        document.getElementById('next-run-tip').innerHTML = '下次运行：<span>' + d.next_run + '</span>';
+        const tip = d.next_run + (jitter > 0 ? '（±' + jitter + ' 分钟内随机）' : '');
+        document.getElementById('next-run-tip').innerHTML = '下次运行：<span>' + tip + '</span>';
         document.getElementById('next-run').textContent = d.next_run;
       } else {
         document.getElementById('next-run-tip').textContent = '';
@@ -542,6 +745,7 @@ refreshStatus();
 loadConfig();
 loadSchedule();
 loadLogs();
+loadFriends();
 
 // Auto refresh
 setInterval(() => { refreshStatus(); loadLogs(); }, 10000);

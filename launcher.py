@@ -16,14 +16,15 @@ if getattr(sys, 'frozen', False):
     sys.path.insert(0, _BUNDLE)
 
 from utils.paths import (
-    ensure_user_dirs,
-    ensure_default_config,
+  ensure_user_dirs,
+  ensure_default_config,
+  AUTH_DIR,
 )
 
-DEFAULT_PORT = 5733  # 避开 macOS AirPlay Receiver 占用的 5000 端口
+DEFAULT_PORT = 5001  # 与文档/安装脚本/launchd plist 保持一致；如被占用自动跳 5002-5010
 
 
-def _pick_free_port(start: int = DEFAULT_PORT, tries: int = 20) -> int:
+def _pick_free_port(start: int = DEFAULT_PORT, tries: int = 10) -> int:
     """从 start 开始找一个未被占用的端口；最多尝试 tries 次"""
     import socket
     for offset in range(tries):
@@ -35,6 +36,16 @@ def _pick_free_port(start: int = DEFAULT_PORT, tries: int = 20) -> int:
             except OSError:
                 continue
     return start  # 都不行就用默认值，让 Flask 自己报错
+
+
+def _write_port_file(port: int) -> None:
+    """把实际监听端口写入 auth/web_port.txt，让打开控制面板脚本可以读取"""
+    try:
+        os.makedirs(AUTH_DIR, exist_ok=True)
+        with open(os.path.join(AUTH_DIR, "web_port.txt"), "w", encoding="utf-8") as f:
+            f.write(str(port))
+    except Exception:
+        pass  # 写失败不影响启动
 
 
 def _chrome_installed() -> bool:
@@ -108,6 +119,7 @@ def main():
     ensure_default_config()
 
     port = _pick_free_port()
+    _write_port_file(port)  # 让打开控制面板脚本知道实际端口
     t = threading.Thread(target=_start_flask, args=(port,), daemon=True)
     t.start()
 

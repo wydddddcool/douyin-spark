@@ -4,6 +4,10 @@ auth/browser_data/
 auth/qrcode.png
 auth/login_page_debug.html
 auth/login_page_debug.png
+auth/web_port.txt
+auth/sent_history.json
+auth/debug_*.png
+auth/debug_*.html
 
 # 用户个人配置（含好友昵称、账号信息）
 config/settings.yaml
@@ -29,3 +33,16 @@ __pycache__/
 .idea/
 .vscode/
 *.swp
+
+# 打包产物（体积大，不提交）
+dist/
+build/
+*.dmg
+*.zip
+douyin-spark-*.zip
+
+# AI 助手本地配置
+.claude/
+
+# 部署记录（含真实公网 IP / 实例 ID / 域名 / nginx 配置，绝不提交）
+DEPLOY.md

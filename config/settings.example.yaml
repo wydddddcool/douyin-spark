@@ -1,0 +1,39 @@
+# 抖音续火花配置示例
+# 使用方法：复制本文件为 settings.yaml，并填入你自己的真实配置
+# cp settings.example.yaml settings.yaml
+
+accounts:
+- name: 我的主号
+  state_file: auth/state.json
+  targets:
+  - 好友的抖音昵称1
+  - 好友的抖音昵称2
+
+message:
+  ai:
+    enabled: true
+    # api_key 在 Web 控制面板填写时会自动加密存储（基于本机特征绑定，跨机器无法解密）
+    # 也可以直接在这里填明文，运行时会自动识别 enc: 前缀的密文
+    providers:
+    - api_key: your-api-key-here
+      base_url: https://apihub.agnes-ai.com/v1
+      model: agnes-2.0-flash
+      name: agnes
+    - api_key: your-api-key-here
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model: qwen-flash
+      name: dashscope
+  template: '{period}好呀 {target} ☀️'
+  use_daily_style: true
+
+runtime:
+  browser_timeout: 120000
+  headless: true
+  log_level: INFO
+  message_delay: 3.0
+
+schedule:
+  enabled: true
+  time: '09:00'
+  days: [1, 2, 3, 4, 5, 6, 7]
+  jitter_minutes: 5
