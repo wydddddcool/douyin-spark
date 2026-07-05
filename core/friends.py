@@ -18,81 +18,121 @@ MAX_SCROLLS = 8  # 拉取好友列表最多滚动 8 次，避免太久
 
 
 def _extract_conversations(page: Page) -> list[dict]:
-    """从当前可见的会话列表抽取出好友信息
+    """从会话列表 scroll container 内部抽出好友信息
+
+    关键约束：必须在会话列表的滚动容器内查找，避免命中侧边栏、
+    tooltip、未关闭弹窗等相同 class 子串。
 
     Returns:
         [{"name": "...", "avatar": "https://...", "fire": "3 天"}, ...]
     """
     items = []
 
-    # 抖音会话列表 selector（覆盖多版本）
-    item_selectors = [
-        '[class*="conversationConversationItem"]',
-        '[class*="ConversationItem"]',
-        '[class*="conversationItem"]',
-        '[class*="chatItem"]',
-        '[data-e2e="chat-item"]',
+    # 先定位会话列表的滚动容器（一次），然后只在它内部找 item
+    list_container_selectors = [
+        '[class*="conversationConversationList"]',
+        '[class*="conversationList"]',
+        '[class*="chatList"]',
+        '[class*="messageList"]',
     ]
 
-    seen_names = set()
-    for sel in item_selectors:
+    container = None
+    for sel in list_container_selectors:
         try:
-            elements = page.locator(sel).all()
-            if not elements:
-                continue
-            for el in elements:
-                try:
-                    if not el.is_visible(timeout=500):
-                        continue
-                    # 昵称
-                    name = ""
-                    for title_sel in ['[class*="title"]', '[class*="name"]', '[class*="nickname"]']:
-                        try:
-                            t = el.locator(title_sel).first
-                            if t.is_visible(timeout=300):
-                                name = (t.text_content(timeout=500) or "").strip()
-                                if name:
-                                    break
-                        except Exception:
-                            continue
-                    if not name:
-                        continue
-                    if name in seen_names:
-                        continue
-
-                    # 头像
-                    avatar = ""
-                    for img_sel in ['img[class*="avatar"]', 'img[class*="Avatar"]', 'img']:
-                        try:
-                            img = el.locator(img_sel).first
-                            if img.is_visible(timeout=300):
-                                avatar = img.get_attribute("src") or ""
-                                if avatar:
-                                    break
-                        except Exception:
-                            continue
-
-                    # 火花天数（在副标题/红标里）
-                    fire = ""
-                    for fire_sel in ['[class*="fire"]', '[class*="spark"]', '[class*="streak"]', '[class*="sub"]']:
-                        try:
-                            f = el.locator(fire_sel).first
-                            if f.is_visible(timeout=300):
-                                fire = (f.text_content(timeout=500) or "").strip()
-                                if fire:
-                                    break
-                        except Exception:
-                            continue
-
-                    items.append({"name": name, "avatar": avatar, "fire": fire})
-                    seen_names.add(name)
-                except Exception:
-                    continue
-            if items:
-                break  # 命中一个 selector 就不再尝试后面的
+            cand = page.locator(sel).first
+            if cand.is_visible(timeout=1000):
+                container = cand
+                logger.debug("会话列表容器命中: %s", sel)
+                break
         except Exception:
             continue
 
+    # 容器内查找 item 的 selectors（按精准度降序）
+    if container is not None:
+        item_selectors_in_container = [
+            '[class*="conversationConversationItem"]',
+            '[class*="ConversationItem"]',
+            '[data-e2e="chat-item"]',
+        ]
+    else:
+        # 兜底：找不到容器时退回全文档（不再命中过宽的 selector）
+        item_selectors_in_container = [
+            '[class*="conversationConversationItem"]',
+            '[data-e2e="chat-item"]',
+        ]
+
+    seen_keys = set()
+    for sel in item_selectors_in_container:
+        scope = container.locator(sel) if container is not None else page.locator(sel)
+        try:
+            elements = scope.all()
+        except Exception:
+            continue
+        if not elements:
+            continue
+
+        for el in elements:
+            try:
+                if not el.is_visible(timeout=500):
+                    continue
+
+                name = ""
+                for title_sel in ['[class*="title"]', '[class*="name"]', '[class*="nickname"]']:
+                    try:
+                        t = el.locator(title_sel).first
+                        if t.is_visible(timeout=300):
+                            name = (t.text_content(timeout=500) or "").strip()
+                            if name:
+                                break
+                    except Exception:
+                        continue
+                if not name:
+                    continue
+
+                # 头像（必须取到 src，没 avatar 的视为骨架屏跳过）
+                avatar = ""
+                for img_sel in ['img[class*="avatar"]', 'img[class*="Avatar"]', 'img']:
+                    try:
+                        img = el.locator(img_sel).first
+                        if img.is_visible(timeout=300):
+                            src = img.get_attribute("src") or ""
+                            if src and not src.startswith("data:image/svg"):
+                                avatar = src
+                                break
+                    except Exception:
+                        continue
+
+                # 双键去重：(name, avatar 末段) — 同一会话复用 avatar
+                # 即便 name 出现细微差异（emoji 后缀/时间戳），avatar 相同也合并
+                avatar_key = ""
+                if avatar:
+                    # 取 URL 末段作为 key（避免长 URL 哈希开销）
+                    avatar_key = avatar.split("/")[-1].split("?")[0][:50]
+                dedup_key = (name, avatar_key)
+                if dedup_key in seen_keys:
+                    continue
+
+                # 火花天数
+                fire = ""
+                for fire_sel in ['[class*="fire"]', '[class*="spark"]', '[class*="streak"]', '[class*="sub"]']:
+                    try:
+                        f = el.locator(fire_sel).first
+                        if f.is_visible(timeout=300):
+                            fire = (f.text_content(timeout=500) or "").strip()
+                            if fire:
+                                break
+                    except Exception:
+                        continue
+
+                items.append({"name": name, "avatar": avatar, "fire": fire})
+                seen_keys.add(dedup_key)
+            except Exception:
+                continue
+
+        if items:
+            break  # 命中精准 selector 后不再试后面的
+
+    logger.info("抽取到 %d 位不重复好友", len(items))
     return items
 
 
@@ -130,50 +170,59 @@ def list_friends(
 
     items = list(_extract_conversations(page))
 
-    # 滚动加载更多
-    scroll_count = 0
-    while scroll_count < MAX_SCROLLS:
-        prev_count = len(items)
-        # 滚动会话列表
-        scrollables = [
-            '[class*="conversationConversationList"]',
-            '[class*="conversationList"]',
-            '[class*="chatList"]',
-            ".semi-scrollbar",
-        ]
-        scrolled = False
-        for sel in scrollables:
-            try:
-                el = page.locator(sel).first
-                if el.is_visible(timeout=1000):
-                    old_top = el.evaluate("el => el.scrollTop")
-                    el.evaluate("el => el.scrollTop += 600")
-                    page.wait_for_timeout(1200)
-                    new_top = el.evaluate("el => el.scrollTop")
-                    if new_top > old_top:
-                        scrolled = True
-                    break
-            except Exception:
-                continue
+    # 滚动加载更多：只在会话列表容器内滚，先滚到底再统一抽一次
+    scrollables = [
+        '[class*="conversationConversationList"]',
+        '[class*="conversationList"]',
+        '[class*="chatList"]',
+        ".semi-scrollbar",
+    ]
 
-        if not scrolled:
-            break
-
-        new_items = _extract_conversations(page)
-        # 合并去重
-        seen = {it["name"] for it in items}
-        for it in new_items:
-            if it["name"] not in seen:
-                items.append(it)
-                seen.add(it["name"])
-
-        if len(items) == prev_count:
-            # 滚动后没有新好友，可能到底了
-            scroll_count += 1
-            if scroll_count >= 3:
+    scroll_container = None
+    for sel in scrollables:
+        try:
+            el = page.locator(sel).first
+            if el.is_visible(timeout=1000):
+                scroll_container = el
                 break
-        else:
-            scroll_count = 0  # 还有新内容，重置计数
+        except Exception:
+            continue
+
+    # 循环滚动到底：每次滚 ~scrollHeight 的距离，连续 N 次没有新内容即停
+    if scroll_container is not None:
+        no_progress_rounds = 0
+        for _ in range(MAX_SCROLLS):
+            try:
+                scroll_height = scroll_container.evaluate("el => el.scrollHeight")
+                client_height = scroll_container.evaluate("el => el.clientHeight")
+                old_top = scroll_container.evaluate("el => el.scrollTop")
+                target = min(old_top + client_height - 40, scroll_height - client_height)
+                if target <= old_top:
+                    # 已到底
+                    no_progress_rounds += 1
+                    if no_progress_rounds >= 2:
+                        break
+                else:
+                    scroll_container.evaluate(f"el => el.scrollTop = {target}")
+                    page.wait_for_timeout(800)
+                    new_top = scroll_container.evaluate("el => el.scrollTop")
+                    if new_top == old_top:
+                        no_progress_rounds += 1
+                        if no_progress_rounds >= 2:
+                            break
+                    else:
+                        no_progress_rounds = 0
+            except Exception:
+                break
+        # 滚完后滚回顶部，再做一次性抽取（虚拟滚动 DOM 已稳定）
+        try:
+            scroll_container.evaluate("el => el.scrollTop = 0")
+            page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+    # 最终一次性抽取（容器内查 + 双键去重，已经不会再重复）
+    items = _extract_conversations(page)
 
     # 刷新登录状态
     try:
