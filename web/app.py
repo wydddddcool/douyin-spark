@@ -220,7 +220,18 @@ def _run_setup_task():
         from playwright.sync_api import sync_playwright
 
         cfg = _load_config()
-        account = cfg["accounts"][0]
+        accounts = cfg.get("accounts", [])
+        if not accounts:
+            # 首次配置：自动创建默认账号
+            accounts = [{
+                "name": "default",
+                "targets": [],
+                "state_file": "auth/state.json",
+            }]
+            cfg["accounts"] = accounts
+            _save_config(cfg)
+            logger.info("首次配置：已创建默认账号")
+        account = accounts[0]
         state_path = account.get("state_file", "auth/state.json")
         full_state = (
             os.path.join(DATA_DIR, state_path)
