@@ -216,7 +216,7 @@ def _run_setup_task():
 
     try:
         from core.auth import wait_for_qrcode_and_login
-        from core.browser import create_persistent_context
+        from core.browser import create_persistent_context, is_system_chrome_available
         from playwright.sync_api import sync_playwright
 
         cfg = _load_config()
@@ -228,8 +228,20 @@ def _run_setup_task():
             else state_path
         )
 
+        # 容器/无显示器环境：强制 headless + 内置 Chromium
+        use_system = is_system_chrome_available()
+        headless_mode = not use_system  # 没系统 Chrome 的环境必然无显示器
+        logger.info(
+            "启动扫码登录：use_system_chrome=%s, headless=%s",
+            use_system, headless_mode,
+        )
+
         with sync_playwright() as p:
-            context = create_persistent_context(p, headless=False)
+            context = create_persistent_context(
+                p,
+                headless=headless_mode,
+                use_system_chrome=use_system,
+            )
             page = context.pages[0] if context.pages else context.new_page()
 
             success = wait_for_qrcode_and_login(page, context, full_state)
@@ -241,6 +253,7 @@ def _run_setup_task():
 
     except Exception as e:
         _runtime["setup_status"] = f"error: {e}"
+        logger.exception("扫码登录异常: %s", e)
 
 
 # ─── 路由 ──────────────────────────────────────────────────

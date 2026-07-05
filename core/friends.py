@@ -197,11 +197,12 @@ def fetch_friends_with_state(state_path: str, headless: bool = True) -> list[dic
         return []
 
     from playwright.sync_api import sync_playwright
-    from core.browser import get_browser, create_context
+    from core.browser import get_browser, create_context, is_system_chrome_available
 
     items: list[dict] = []
+    use_system = is_system_chrome_available()
     with sync_playwright() as p:
-        browser = get_browser(p, headless=headless)
+        browser = get_browser(p, headless=headless, use_system_chrome=use_system)
         context = create_context(browser, storage_state=state_path)
         page = context.new_page()
         try:

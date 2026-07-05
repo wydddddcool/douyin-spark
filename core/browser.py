@@ -1,6 +1,7 @@
 """Playwright 浏览器初始化 + 反检测"""
 
 import os
+import shutil
 from typing import Optional
 from playwright.sync_api import (
     Playwright,
@@ -18,21 +19,54 @@ UA = (
 )
 
 
-def get_browser(p: Playwright, headless: bool = True) -> Browser:
-    """启动浏览器（无持久化）— 用系统 Chrome 而非 Playwright 内置 Chromium
+def is_system_chrome_available() -> bool:
+    """检测当前环境是否安装了系统 Chrome
+
+    Docker 容器通常没有系统 Chrome，需要回退到 Playwright 内置 Chromium。
+    """
+    # 容器环境标志
+    if os.path.exists("/.dockerenv"):
+        return False
+    # 常见 Chrome 可执行文件路径
+    chrome_paths = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+        "/usr/bin/google-chrome-stable",
+    ]
+    for path in chrome_paths:
+        if os.path.exists(path):
+            return True
+    # which 命令兜底
+    return shutil.which("google-chrome") is not None or shutil.which("chrome") is not None
+
+
+def get_browser(
+    p: Playwright,
+    headless: bool = True,
+    use_system_chrome: bool = True,
+) -> Browser:
+    """启动浏览器（无持久化）— 默认用系统 Chrome 而非 Playwright 内置 Chromium
 
     原因：1) 打包后内置 Chromium 不在 bundle 里，frozen 模式必崩；
     2) 抖音对 Playwright 内置 Chromium 触发人机验证，系统 Chrome 不会。
+
+    参数：
+        use_system_chrome: True=系统 Chrome（本地 macOS 推荐），
+                          False=Playwright 内置 Chromium（Docker 环境）
     """
-    return p.chromium.launch(
-        channel="chrome",
-        headless=headless,
-        args=[
+    launch_kwargs = {
+        "headless": headless,
+        "args": [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-dev-shm-usage",
         ],
-    )
+    }
+    if use_system_chrome:
+        launch_kwargs["channel"] = "chrome"
+    return p.chromium.launch(**launch_kwargs)
 
 
 def create_context(
@@ -55,27 +89,43 @@ def create_context(
     return context
 
 
-def create_persistent_context(p: Playwright, headless: bool = False) -> BrowserContext:
+def create_persistent_context(
+    p: Playwright,
+    headless: bool = False,
+    use_system_chrome: bool = True,
+) -> BrowserContext:
     """创建持久化浏览器上下文（用于 setup 登录）
 
     使用系统 Chrome（channel="chrome"）而非 Playwright 内置 Chromium，
     因为抖音会对内置 Chromium 触发人机验证，而系统 Chrome 指纹真实不会。
     持久化 context 拥有完整的用户数据目录，行为更像真实用户浏览器。
+
+    参数：
+        headless: 是否无头模式（Docker/服务器环境必须 True）
+        use_system_chrome: True=用系统 Chrome（本地 macOS 推荐），
+                          False=用 Playwright 内置 Chromium（Docker 环境）
     """
     os.makedirs(USER_DATA_DIR, exist_ok=True)
 
-    context = p.chromium.launch_persistent_context(
-        USER_DATA_DIR,
-        channel="chrome",          # 关键：用系统 Chrome 而非 Playwright Chromium
-        headless=headless,
-        viewport={"width": 1920, "height": 1080},
-        locale="zh-CN",
-        timezone_id="Asia/Shanghai",
-        args=[
+    launch_kwargs = {
+        "headless": headless,
+        "viewport": {"width": 1920, "height": 1080},
+        "locale": "zh-CN",
+        "timezone_id": "Asia/Shanghai",
+        "args": [
             "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
         ],
-    )
-    # 系统 Chrome 不需要注入 stealth JS（它本身就是真实浏览器）
+    }
+    if use_system_chrome:
+        launch_kwargs["channel"] = "chrome"
+
+    context = p.chromium.launch_persistent_context(USER_DATA_DIR, **launch_kwargs)
+
+    # 内置 Chromium 需要注入 stealth JS 反检测；系统 Chrome 不需要
+    if not use_system_chrome:
+        _inject_stealth(context)
     return context
 
 
