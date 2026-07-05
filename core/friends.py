@@ -18,26 +18,30 @@ MAX_SCROLLS = 8  # 拉取好友列表最多滚动 8 次，避免太久
 
 
 def _extract_conversations(page: Page) -> list[dict]:
-    """从会话列表 scroll container 内部抽出好友信息
+    """从会话列表抽出好友信息，去重 DOM 嵌套
 
-    关键约束：必须在会话列表的滚动容器内查找，避免命中侧边栏、
-    tooltip、未关闭弹窗等相同 class 子串。
+    关键约束：抖音页面同一个会话可能被渲染成多个嵌套 div（外层 item + 中层
+    内层节点 + 文本节点），这些都会被 selector 同时命中。我们要做的：
+
+    1. 收集容器内所有 candidate 节点
+    2. 用 DOM `compareDocumentPosition` 找出"不被任何其它 candidate 包含"的最外层节点
+    3. 只对最外层节点抽一次昵称/头像/天数
+    4. 二次按 (name, avatar) 双键去重，兜底虚拟滚动边缘的同会话重渲染
 
     Returns:
         [{"name": "...", "avatar": "https://...", "fire": "3 天"}, ...]
     """
     items = []
 
-    # 先定位会话列表的滚动容器（一次），然后只在它内部找 item
-    list_container_selectors = [
+    # 1. 定位会话列表滚动容器
+    container_selectors = [
         '[class*="conversationConversationList"]',
         '[class*="conversationList"]',
         '[class*="chatList"]',
         '[class*="messageList"]',
     ]
-
     container = None
-    for sel in list_container_selectors:
+    for sel in container_selectors:
         try:
             cand = page.locator(sel).first
             if cand.is_visible(timeout=1000):
@@ -47,92 +51,115 @@ def _extract_conversations(page: Page) -> list[dict]:
         except Exception:
             continue
 
-    # 容器内查找 item 的 selectors（按精准度降序）
-    if container is not None:
-        item_selectors_in_container = [
-            '[class*="conversationConversationItem"]',
-            '[class*="ConversationItem"]',
-            '[data-e2e="chat-item"]',
-        ]
-    else:
-        # 兜底：找不到容器时退回全文档（不再命中过宽的 selector）
-        item_selectors_in_container = [
-            '[class*="conversationConversationItem"]',
-            '[data-e2e="chat-item"]',
-        ]
+    # 2. 收集所有候选 item（合并多个 selector 的结果）
+    item_selectors = [
+        '[class*="conversationConversationItem"]',
+        '[class*="ConversationItem"]',
+        '[data-e2e="chat-item"]',
+    ]
+    scope = container if container is not None else page
 
-    seen_keys = set()
-    for sel in item_selectors_in_container:
-        scope = container.locator(sel) if container is not None else page.locator(sel)
+    candidates = []
+    for sel in item_selectors:
         try:
-            elements = scope.all()
+            els = scope.locator(sel).all()
         except Exception:
             continue
-        if not elements:
+        for el in els:
+            candidates.append(el)
+    if not candidates:
+        logger.warning("没找到任何候选 item 节点")
+        return items
+
+    logger.info("收集到 %d 个候选 item（去重前）", len(candidates))
+
+    # 3. 用 compareDocumentPosition 过滤出"最外层"节点
+    #    Node.DOCUMENT_POSITION_CONTAINED_BY == 16，位运算判断是否 other 是 el 的后代
+    outermost = []
+    n = len(candidates)
+    for i in range(n):
+        try:
+            el_i = candidates[i]
+            is_outer = True
+            for j in range(n):
+                if i == j:
+                    continue
+                # 检查 el_j 是否被 el_i 包含（我们关心的是 el_i 不能被包含）
+                pos = el_i.evaluate(
+                    "(el, other) => other.compareDocumentPosition(el)",
+                    candidates[j],
+                )
+                # pos & 16 (CONTAINED_BY) 表示 el_i 是 el_j 的后代 ⇒ el_i 不是最外层
+                if pos & 16:
+                    is_outer = False
+                    break
+            if is_outer:
+                outermost.append(el_i)
+        except Exception:
             continue
 
-        for el in elements:
-            try:
-                if not el.is_visible(timeout=500):
-                    continue
+    logger.info("去重后保留 %d 个最外层节点", len(outermost))
 
-                name = ""
-                for title_sel in ['[class*="title"]', '[class*="name"]', '[class*="nickname"]']:
-                    try:
-                        t = el.locator(title_sel).first
-                        if t.is_visible(timeout=300):
-                            name = (t.text_content(timeout=500) or "").strip()
-                            if name:
-                                break
-                    except Exception:
-                        continue
-                if not name:
-                    continue
-
-                # 头像（必须取到 src，没 avatar 的视为骨架屏跳过）
-                avatar = ""
-                for img_sel in ['img[class*="avatar"]', 'img[class*="Avatar"]', 'img']:
-                    try:
-                        img = el.locator(img_sel).first
-                        if img.is_visible(timeout=300):
-                            src = img.get_attribute("src") or ""
-                            if src and not src.startswith("data:image/svg"):
-                                avatar = src
-                                break
-                    except Exception:
-                        continue
-
-                # 双键去重：(name, avatar 末段) — 同一会话复用 avatar
-                # 即便 name 出现细微差异（emoji 后缀/时间戳），avatar 相同也合并
-                avatar_key = ""
-                if avatar:
-                    # 取 URL 末段作为 key（避免长 URL 哈希开销）
-                    avatar_key = avatar.split("/")[-1].split("?")[0][:50]
-                dedup_key = (name, avatar_key)
-                if dedup_key in seen_keys:
-                    continue
-
-                # 火花天数
-                fire = ""
-                for fire_sel in ['[class*="fire"]', '[class*="spark"]', '[class*="streak"]', '[class*="sub"]']:
-                    try:
-                        f = el.locator(fire_sel).first
-                        if f.is_visible(timeout=300):
-                            fire = (f.text_content(timeout=500) or "").strip()
-                            if fire:
-                                break
-                    except Exception:
-                        continue
-
-                items.append({"name": name, "avatar": avatar, "fire": fire})
-                seen_keys.add(dedup_key)
-            except Exception:
+    # 4. 每个最外层抽一次三要素
+    seen_keys = set()
+    for el in outermost:
+        try:
+            if not el.is_visible(timeout=500):
                 continue
 
-        if items:
-            break  # 命中精准 selector 后不再试后面的
+            name = ""
+            for title_sel in ['[class*="title"]', '[class*="name"]', '[class*="nickname"]']:
+                try:
+                    t = el.locator(title_sel).first
+                    if t.is_visible(timeout=300):
+                        name = (t.text_content(timeout=500) or "").strip()
+                        if name:
+                            break
+                except Exception:
+                    continue
+            if not name:
+                continue
 
-    logger.info("抽取到 %d 位不重复好友", len(items))
+            avatar = ""
+            for img_sel in ['img[class*="avatar"]', 'img[class*="Avatar"]', 'img']:
+                try:
+                    img = el.locator(img_sel).first
+                    if img.is_visible(timeout=300):
+                        src = img.get_attribute("src") or ""
+                        if src and not src.startswith("data:image/svg"):
+                            avatar = src
+                            break
+                except Exception:
+                    continue
+
+            # avatar 为空就丢弃（很可能是骨架屏 / tooltip）
+            if not avatar:
+                logger.debug("跳过无 avatar 节点: %s", name)
+                continue
+
+            avatar_key = avatar.split("/")[-1].split("?")[0][:50]
+            dedup_key = (name, avatar_key)
+            if dedup_key in seen_keys:
+                continue
+
+            fire = ""
+            for fire_sel in ['[class*="fire"]', '[class*="spark"]', '[class*="streak"]', '[class*="sub"]']:
+                try:
+                    f = el.locator(fire_sel).first
+                    if f.is_visible(timeout=300):
+                        fire = (f.text_content(timeout=500) or "").strip()
+                        if fire:
+                            break
+                except Exception:
+                    continue
+
+            items.append({"name": name, "avatar": avatar, "fire": fire})
+            seen_keys.add(dedup_key)
+        except Exception:
+            continue
+
+    logger.info("最终抽取到 %d 位不重复好友（候选 %d → 外层 %d → 结果 %d）",
+                len(items), len(candidates), len(outermost), len(items))
     return items
 
 
