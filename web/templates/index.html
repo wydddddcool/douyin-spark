@@ -417,7 +417,9 @@ async function refreshStatus() {
     }
 
     document.getElementById('btn-run').disabled = d.running;
-    document.getElementById('btn-setup').disabled = d.setup_status === 'waiting_scan';
+    const stuck = d.setup_status === 'waiting_scan';
+    document.getElementById('btn-setup').disabled = stuck;
+    document.getElementById('btn-setup-reset').classList.toggle('hidden', !stuck);
 
     const nextRunEl = document.getElementById('next-run');
     nextRunEl.textContent = d.next_run || '未启用';
