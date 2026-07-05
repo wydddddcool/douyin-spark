@@ -12,7 +12,7 @@ CHAT_URL = "https://www.douyin.com/chat"
 
 
 def is_logged_in(page: Page, save_debug: bool = False) -> bool:
-    """检测聊天页是否已登录，最长等待 12 秒让 JS 渲染完成"""
+    """检测聊天页是否已登录，最长等待 15 秒让 JS 渲染完成"""
     # 如果 URL 包含 passport/login，肯定未登录
     url = page.url.lower()
     if "passport" in url or "/login" in url:
@@ -27,14 +27,14 @@ def is_logged_in(page: Page, save_debug: bool = False) -> bool:
         '[data-e2e="chat-item"]',
     ]
 
-    # 先等待任意一个会话列表 selector 出现（最多等 12 秒）
-    for sel in chat_item_selectors:
-        try:
-            page.wait_for_selector(sel, timeout=12000)
-            logger.debug("登录检测命中 selector: %s", sel)
-            return True
-        except Exception:
-            continue
+    # 一次性 OR 等待任意 selector 命中（最长 15 秒），替代顺序轮询 60 秒
+    combined = ", ".join(chat_item_selectors)
+    try:
+        page.wait_for_selector(combined, timeout=15000)
+        logger.debug("登录检测命中组合 selector")
+        return True
+    except Exception:
+        pass
 
     # 兜底：列表区域有 ≥3 行 div
     try:
@@ -73,16 +73,29 @@ def _find_qrcode(page: Page) -> bool:
         'img[src*="qr"]',
     ]
 
-    for selector in qrcode_selectors:
-        try:
-            qr_el = page.wait_for_selector(selector, timeout=5000)
-            if qr_el and qr_el.is_visible():
+    # 一次性 OR 等待任意 selector 命中（最长 15 秒），替代顺序轮询 60 秒
+    combined = ", ".join(qrcode_selectors)
+    try:
+        qr_el = page.wait_for_selector(combined, timeout=15000)
+        if qr_el and qr_el.is_visible():
+            # 验证尺寸像二维码（正方形 120-400px），不像就让兜底接管
+            try:
+                box = qr_el.bounding_box()
+                if box:
+                    w, h = box["width"], box["height"]
+                    ratio = w / h if h > 0 else 0
+                    if 80 < w < 500 and 0.7 < ratio < 1.3:
+                        qr_el.screenshot(path=QRCODE_PATH)
+                        logger.info("✅ 二维码已保存: %s", os.path.abspath(QRCODE_PATH))
+                        logger.info("   请用抖音 App「扫一扫」扫描此二维码登录")
+                        return True
+                    logger.info("命中元素尺寸不像二维码 (%dx%d, ratio=%.2f)，走兜底", int(w), int(h), ratio)
+            except Exception as e:
+                logger.warning("尺寸验证异常: %s，直接截图", e)
                 qr_el.screenshot(path=QRCODE_PATH)
-                logger.info("✅ 二维码已保存: %s", os.path.abspath(QRCODE_PATH))
-                logger.info("   请用抖音 App「扫一扫」扫描此二维码登录")
                 return True
-        except Exception:
-            continue
+    except Exception:
+        pass
 
     return False
 

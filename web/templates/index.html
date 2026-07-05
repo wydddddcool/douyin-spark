@@ -385,9 +385,32 @@ async function refreshStatus() {
     // Setup status
     if (d.setup_status === 'waiting_scan') {
       document.getElementById('qr-section').style.display = '';
-      document.getElementById('qr-status').textContent = '等待扫码中...';
-      // Try to load QR image
-      document.getElementById('qr-img').src = API + '/api/qrcode?' + Date.now();
+      const qrImg = document.getElementById('qr-img');
+      // 仅在图片已加载过（src 指向 /api/qrcode）的情况下刷新，避免覆盖轮询的"正在生成"占位
+      if (qrImg.src && qrImg.src.includes('/api/qrcode')) {
+        qrImg.src = API + '/api/qrcode?' + Date.now();
+      } else if (!_qrPollTimer) {
+        // 页面刷新后还在 waiting_scan 状态，启动轮询恢复二维码
+        document.getElementById('qr-status').textContent = '正在生成二维码...（预计 30 秒内）';
+        _qrPollTimer = setInterval(async () => {
+          try {
+            const sr2 = await fetch(API + '/api/status');
+            const sd2 = await sr2.json();
+            if (sd2.setup_status && sd2.setup_status !== 'waiting_scan' && !sd2.setup_status.startsWith('starting')) {
+              clearInterval(_qrPollTimer);
+              _qrPollTimer = null;
+              return;
+            }
+            const qr2 = await fetch(API + '/api/qrcode', {method: 'HEAD'});
+            if (qr2.status === 200) {
+              qrImg.src = API + '/api/qrcode?' + Date.now();
+              document.getElementById('qr-status').textContent = '请用抖音 App「扫一扫」扫描上方二维码';
+              clearInterval(_qrPollTimer);
+              _qrPollTimer = null;
+            }
+          } catch (e) { /* ignore */ }
+        }, 2000);
+      }
     } else if (d.setup_status === 'success') {
       document.getElementById('qr-section').style.display = '';
       document.getElementById('qr-status').innerHTML = '<span style="color:var(--success)">✅ 登录成功！</span>';
@@ -519,17 +542,45 @@ async function triggerRun() {
   setTimeout(refreshStatus, 2000);
 }
 
+let _qrPollTimer = null;
+
 async function triggerSetup() {
   try {
     const r = await fetch(API + '/api/setup', {method: 'POST'});
     const d = await r.json();
-    toast(d.ok ? '请在弹出窗口中扫码登录' : d.error);
+    if (!d.ok) {
+      toast(d.error || '启动失败');
+      return;
+    }
+    toast('正在生成二维码，请稍候...');
     document.getElementById('qr-section').style.display = '';
-    // Poll for QR code
-    setTimeout(() => {
-      document.getElementById('qr-img').src = API + '/api/qrcode?' + Date.now();
-      document.getElementById('qr-status').textContent = '等待扫码中...';
-    }, 3000);
+    document.getElementById('qr-img').src = '';
+    document.getElementById('qr-status').textContent = '正在生成二维码...（预计 30 秒内）';
+    // 轮询 HEAD /api/qrcode 直到 200 才加载图片
+    if (_qrPollTimer) clearInterval(_qrPollTimer);
+    _qrPollTimer = setInterval(async () => {
+      try {
+        // 检查 setup_status，failed/error 时停止
+        const sr = await fetch(API + '/api/status');
+        const sd = await sr.json();
+        if (sd.setup_status && sd.setup_status !== 'waiting_scan' && !sd.setup_status.startsWith('starting')) {
+          clearInterval(_qrPollTimer);
+          _qrPollTimer = null;
+          if (sd.setup_status.startsWith('error')) {
+            document.getElementById('qr-status').innerHTML = '<span style="color:var(--error)">❌ ' + escHtml(sd.setup_status) + '</span>';
+          }
+          return;
+        }
+        // HEAD 探测二维码是否已生成
+        const qr = await fetch(API + '/api/qrcode', {method: 'HEAD'});
+        if (qr.status === 200) {
+          document.getElementById('qr-img').src = API + '/api/qrcode?' + Date.now();
+          document.getElementById('qr-status').textContent = '请用抖音 App「扫一扫」扫描上方二维码';
+          clearInterval(_qrPollTimer);
+          _qrPollTimer = null;
+        }
+      } catch (e) { /* ignore */ }
+    }, 2000);
   } catch (e) {
     toast('请求失败');
   }
