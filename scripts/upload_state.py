@@ -83,6 +83,11 @@ def run_remote(cmd: str, timeout: int = 60) -> str:
 
 
 def main():
+    if not ECS_INSTANCE_ID:
+        print("✗ ECS_INSTANCE_ID 环境变量未设置")
+        print("  用法：ECS_INSTANCE_ID=i-xxxxx python3 scripts/upload_state.py")
+        sys.exit(1)
+
     if not STATE_PATH.exists():
         print(f"✗ state.json 不存在: {STATE_PATH}")
         sys.exit(1)
