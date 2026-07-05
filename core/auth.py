@@ -59,6 +59,7 @@ def is_logged_in(page: Page, save_debug: bool = False) -> bool:
 def _find_qrcode(page: Page) -> bool:
     """在页面上查找二维码并截图保存，返回是否找到"""
     qrcode_selectors = [
+        # 弹窗式登录
         'div[data-e2e="qrcode-login-container"] img',
         'img[class*="qrcode"]',
         'img[alt*="扫码"]',
@@ -71,6 +72,18 @@ def _find_qrcode(page: Page) -> bool:
         '[class*="dialog"] img',
         'img[src*="qrcode"]',
         'img[src*="qr"]',
+        # 全屏登录页 (douyin.com/chat 凭证失效时会进入这个页面)
+        '[class*="login"] canvas',
+        '[class*="Login"] canvas',
+        '[class*="qrcode"] canvas',
+        '[class*="QrCode"] canvas',
+        '[class*="QRCode"] canvas',
+        '[class*="scan"] canvas',
+        'div[data-e2e*="qrcode"] canvas',
+        'div[class*="QRCodeWrapper"]',
+        'div[class*="QrCodeWrapper"]',
+        'div[class*="qrcodeWrapper"]',
+        # 兜底：页面里唯一的 canvas（>100px）
     ]
 
     # 一次性 OR 等待任意 selector 命中（最长 15 秒），替代顺序轮询 60 秒

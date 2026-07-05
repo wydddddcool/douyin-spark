@@ -22,6 +22,7 @@ from utils.paths import (
     WEB_TEMPLATES_DIR,
     WEB_STATIC_DIR,
     DATA_DIR,
+    QRCODE_PATH,
 )
 from utils.logger import setup_logger
 
@@ -213,6 +214,14 @@ def _run_setup_task():
     """后台执行扫码登录（使用持久化浏览器上下文）"""
     global _runtime
     _runtime["setup_status"] = "waiting_scan"
+
+    # 清空旧的 qrcode.png，避免前端 HEAD 一直返回过期的旧图
+    try:
+        if os.path.exists(QRCODE_PATH):
+            os.remove(QRCODE_PATH)
+            logger.info("已清空旧的二维码文件")
+    except Exception as e:
+        logger.warning("清空旧二维码失败: %s", e)
 
     try:
         from core.auth import wait_for_qrcode_and_login

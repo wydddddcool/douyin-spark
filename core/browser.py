@@ -112,6 +112,7 @@ def create_persistent_context(
         "viewport": {"width": 1920, "height": 1080},
         "locale": "zh-CN",
         "timezone_id": "Asia/Shanghai",
+        "user_agent": UA,
         "args": [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
