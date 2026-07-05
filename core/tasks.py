@@ -15,6 +15,37 @@ from utils.logger import setup_logger
 
 logger = setup_logger("tasks")
 
+_MSG_SELECTORS = [
+    '[class*="MessageItem"]',
+    '[class*="messageItem"]',
+    '[class*="chatMessage"]',
+    '[class*="bubble"]',
+    '[data-e2e="message-item"]',
+    '[class*="contentItem"]',
+]
+
+
+def _get_latest_messages(page: Page, n: int = 10) -> list:
+    """从聊天记录里拉最新的 n 条消息文本"""
+    for sel in _MSG_SELECTORS:
+        try:
+            els = page.locator(sel).all()
+            if els:
+                texts = []
+                for e in els[:n]:
+                    try:
+                        t = e.text_content(timeout=1000)
+                        if t and t.strip():
+                            texts.append(t.strip())
+                    except Exception:
+                        pass
+                if texts:
+                    return texts
+        except Exception:
+            continue
+    return []
+
+
 CHAT_URL = "https://www.douyin.com/chat"
 MAX_SCROLLS = 30
 SCROLL_STEP = 500
@@ -45,23 +76,34 @@ def scroll_conversation_list(page: Page) -> bool:
 
 
 def find_target_on_page(page: Page, target_name: str) -> bool:
-    """在当前页面上查找目标好友，返回是否找到并点击"""
-    # 策略 1：精确文本匹配
-    strategies = [
-        # text locator
-        lambda: page.get_by_text(target_name, exact=True).first,
-        # 模糊匹配
-        lambda: page.locator(f'text="{target_name}"').first,
-        # 包含文本的任意元素
-        lambda: page.locator(f':text-is("{target_name}")').first,
-    ]
+    """在当前页面上查找目标好友，返回是否找到并点击。
 
-    for strategy in strategies:
+    抖音会话列表里同一个好友会出现两次：
+      - 完整文本："cc不想熬夜 346 17分钟前"
+      - 纯昵称短版本："cc不想熬夜"
+    所以 config 里只存稳定昵称（如"cc不想熬夜"），匹配时按多级降级策略：
+
+      1. 精确匹配纯昵称（最高优先级，能精准点击短文本节点）
+      2. 包含匹配（target 出现在 title 文本里）
+      3. startsWith 匹配（兜底，处理 emoji 昵称等边界情况）
+    """
+    escaped = target_name.replace('"', '\\"')
+
+    # 策略 1：精确匹配（优先命中抖音渲染的"纯昵称短版本"）
+    strategy_exact = lambda: page.get_by_text(target_name, exact=True).first
+    # 策略 2：包含匹配（target 出现在 title 里）
+    strategy_contains = lambda: page.locator(f'text="{escaped}"').first
+    # 策略 3：包含语法的 locator
+    strategy_has_text = lambda: page.locator(f':has-text("{escaped}")').first
+
+    strategies = [strategy_exact, strategy_contains, strategy_has_text]
+
+    for idx, strategy in enumerate(strategies, 1):
         try:
             locator = strategy()
             if locator.is_visible(timeout=3000):
                 locator.click()
-                logger.info("   ✅ 点击好友: %s", target_name)
+                logger.info("   ✅ 点击好友: %s (命中策略 %d)", target_name, idx)
                 time.sleep(2)
                 return True
         except Exception:
@@ -185,11 +227,22 @@ def _do_send(page: Page, target: str, cfg: dict) -> bool:
 
         # 发送（Enter）
         page.keyboard.press("Enter")
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(3000)
 
-        logger.info("   ✅ 消息已发送 -> %s", target)
-        record_sent(msg)
-        return True
+        # 验证：检查最新消息里有没有我们发的内容
+        latest_msgs = _get_latest_messages(page, n=15)
+        msg_in_chat = any(msg in t for t in latest_msgs) if latest_msgs else False
+
+        if msg_in_chat:
+            logger.info("   ✅ 消息已发送 -> %s", target)
+            record_sent(msg)
+            return True
+        else:
+            # 没出现在聊天记录里 = 被拦截/发送失败
+            logger.warning("   ❌ 消息发送后未出现在聊天记录，可能被拦截 (%s)", target)
+            logger.debug("   最新消息: %s", [t[:40] for t in latest_msgs[:5]])
+            page.screenshot(path=os.path.join(AUTH_DIR, "debug_send_not_delivered.png"))
+            return False
 
     except Exception as e:
         logger.warning("   ❌ 发送失败 (%s): %s", target, e)
@@ -234,4 +287,9 @@ def run_tasks(
     if not_found:
         logger.info("未找到的好友: %s", not_found)
 
-    return len(not_found) == 0
+    send_failed = [t for t in targets if t not in sent and t not in not_found]
+    if send_failed:
+        logger.warning("发送失败的好友: %s", send_failed)
+
+    all_ok = len(sent) == len(targets)
+    return all_ok

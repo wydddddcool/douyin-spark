@@ -4,6 +4,7 @@
 """
 
 import os
+import re
 from typing import Optional
 
 from playwright.sync_api import Page, BrowserContext
@@ -12,6 +13,82 @@ from utils.logger import setup_logger
 from utils.paths import AUTH_DIR
 
 logger = setup_logger("friends")
+
+
+def strip_target_suffix(raw: str) -> str:
+    """清洗 target / 好友名称：去掉尾部 "数字火花 + 时间戳" 后缀。
+
+    抖音会话列表渲染时，title 文本可能包含完整信息，例如：
+      - "cc不想熬夜 346 25分钟前"                        (空格分隔)
+      - "💪👽🤌 30 16分钟前"                             (空格分隔)
+      - "小宝今天吃点啥24分钟前"                          (无空格：紧贴昵称)
+      - "小宝今天吃点啥04/12"                             (无空格)
+      - "女足马德李的AI分身AI分身06/29"                   (无空格)
+      - "cc不想熬夜"                                    (干净的不该动)
+
+    策略：递归剥壳——
+      1. 按空白切，保留第一个"以数字/时间词开头"的 token 之前的部分
+      2. 整字符串没空格，按"末尾日期/时间/AI分身后缀"剥
+      3. 末尾纯数字尾巴（紧贴前面的数字火花）
+
+    终止条件：剥不动 / 剥完为空 → 返回
+    """
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return s
+
+    meta_re = re.compile(
+        r"(\d+\s*(分钟前|小时前|秒前))"
+        r"|(\d+\s*天\s*前)"
+        r"|(刚刚|昨天|前天|今天)"
+        r"|(\d{1,2}/\d{1,2}(\s|$))"
+        r"|(\d{4}/\d{1,2}/\d{1,2}(\s|$))"
+        r"|(\d{1,2}:\d{2}(\s|$))"
+        r"|(AI分身)"
+    )
+
+    prev = None
+    while prev != s:
+        prev = s
+
+        tokens = s.split()
+        pure_tokens = []
+        cut = False
+        for t in tokens:
+            if meta_re.search(t):
+                cut = True
+                break
+            pure_tokens.append(t)
+        if cut and pure_tokens:
+            s = " ".join(pure_tokens).strip()
+            continue
+
+        m = re.search(
+            r"(\d+\s*(分钟前|小时前|秒前|天\s*前))"
+            r"|(\d{1,2}/\d{1,2})$"
+            r"|(\d{4}/\d{1,2}/\d{1,2})$"
+            r"|(\d{1,2}:\d{2})$"
+            r"|(刚刚|昨天|前天|今天)$"
+            r"|AI分身$",
+            s,
+        )
+        if m:
+            s = s[: m.start()].rstrip()
+            continue
+
+        m = re.search(r"\d+$", s)
+        if m and m.start() > 0:
+            s = s[: m.start()].rstrip()
+            continue
+
+        break
+
+    return s.strip()
+
+
+
 
 CHAT_URL = "https://www.douyin.com/chat"
 MAX_SCROLLS = 8  # 拉取好友列表最多滚动 8 次，避免太久
@@ -134,8 +211,22 @@ def _extract_conversations(page: Page) -> list[dict]:
 
     logger.info("收集到 %d 个候选 item（去重前）", extracted["totalCandidates"])
     logger.info("去重后保留 %d 个最外层节点", extracted["outerCount"])
-    items = extracted["items"]
-    logger.info("最终抽取到 %d 位不重复好友", len(items))
+    raw_items = extracted["items"]
+
+    # 抖音 title div 里把完整文本（含数字火花 + 时间戳）一起返回
+    # 在源头清洗成稳定昵称，让 UI 显示和写入 config 都用同一份干净数据
+    cleaned_items = []
+    seen_names = set()
+    for it in raw_items:
+        pure_name = strip_target_suffix(it.get("name", ""))
+        if not pure_name or pure_name in seen_names:
+            continue
+        seen_names.add(pure_name)
+        cleaned_items.append({**it, "name": pure_name})
+
+    # 清洗后再去重一次（不同 avatar 的同一昵称会被合并成 1 个）
+    logger.info("清洗后保留 %d 位唯一好友（清洗前去重 %d）", len(cleaned_items), len(raw_items))
+    items = cleaned_items
     return items
 
 

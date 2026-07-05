@@ -2,6 +2,8 @@
 
 import copy
 import os
+import re
+import json
 import sys
 import threading
 from datetime import datetime
@@ -25,6 +27,8 @@ from utils.paths import (
     QRCODE_PATH,
 )
 from utils.logger import setup_logger
+
+from core.friends import strip_target_suffix
 
 logger = setup_logger("web")
 
@@ -53,6 +57,8 @@ _SPARK_JOB_ID = "douyin_spark_daily"
 
 
 # ─── 工具函数 ──────────────────────────────────────────────
+
+
 
 
 def _load_config() -> dict:
@@ -161,9 +167,13 @@ def _run_spark_task():
     logger.info("=" * 40)
 
     try:
-        from core.browser import get_browser, create_context
+        from core.browser import get_browser, create_context, is_system_chrome_available
         from core.tasks import run_tasks
         from playwright.sync_api import sync_playwright
+
+        # 容器/无显示器环境：用 Playwright 内置 Chromium（Dockerfile 装的是 chromium 不是 chrome）
+        use_system_chrome = is_system_chrome_available()
+        logger.info("浏览器选择: use_system_chrome=%s", use_system_chrome)
 
         cfg = _load_config()
         accounts = cfg.get("accounts", [])
@@ -184,7 +194,7 @@ def _run_spark_task():
                     results.append({"account": name, "status": "no_auth"})
                     continue
 
-                browser = get_browser(p, headless=True)
+                browser = get_browser(p, headless=True, use_system_chrome=use_system_chrome)
                 context = create_context(browser, storage_state=full_state)
                 page = context.new_page()
 
@@ -391,15 +401,22 @@ def api_save_config():
 
 @app.route("/api/targets", methods=["POST"])
 def api_update_targets():
-    """更新好友列表"""
+    """更新好友列表（也做清洗，保证写入 config 的都是稳定昵称）"""
     data = request.json
     targets = data.get("targets", [])
 
     cfg = _load_config()
     if cfg.get("accounts") and len(cfg["accounts"]) > 0:
-        cfg["accounts"][0]["targets"] = targets
+        cleaned = []
+        for n in targets:
+            n = str(n).strip()
+            if n:
+                pure = strip_target_suffix(n)
+                if pure and pure not in cleaned:
+                    cleaned.append(pure)
+        cfg["accounts"][0]["targets"] = cleaned
         _save_config(cfg)
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "cleaned": cleaned})
     return jsonify({"ok": False, "error": "没有账号配置"}), 400
 
 
@@ -465,7 +482,7 @@ def _run_fetch_friends_task():
     _runtime["friends_fetching"] = True
 
     try:
-        from core.friends import fetch_friends_with_state
+        from core.friends import fetch_friends_with_state, strip_target_suffix
 
         state_path = _resolve_state_path()
         if not state_path:
@@ -525,7 +542,13 @@ def api_refresh_friends():
 
 @app.route("/api/friends/select", methods=["POST"])
 def api_select_friends():
-    """批量设置续火花目标（覆盖现有）"""
+    """批量设置续火花目标（覆盖现有）
+
+    UI 传过来的 target 是抖音渲染的完整文本（含 "数字火花 + 时间戳" 后缀）。
+    这里在写入 config 前先做清洗，只保留稳定昵称部分，
+    这样匹配策略（精确匹配纯昵称）能稳定命中，
+    不受时间戳/火花数字变化影响。
+    """
     data = request.json or {}
     names = data.get("targets", [])
     if not isinstance(names, list):
@@ -535,9 +558,17 @@ def api_select_friends():
     if not cfg.get("accounts"):
         return jsonify({"ok": False, "error": "没有账号配置"}), 400
 
-    cfg["accounts"][0]["targets"] = [str(n).strip() for n in names if str(n).strip()]
+    cleaned = []
+    for n in names:
+        n = str(n).strip()
+        if n:
+            pure = strip_target_suffix(n)
+            if pure and pure not in cleaned:
+                cleaned.append(pure)
+
+    cfg["accounts"][0]["targets"] = cleaned
     _save_config(cfg)
-    return jsonify({"ok": True, "count": len(cfg["accounts"][0]["targets"])})
+    return jsonify({"ok": True, "count": len(cleaned), "cleaned": cleaned})
 
 
 @app.route("/api/logs")
