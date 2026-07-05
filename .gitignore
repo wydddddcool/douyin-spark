@@ -46,3 +46,14 @@ douyin-spark-*.zip
 
 # 部署记录（含真实公网 IP / 实例 ID / 域名 / nginx 配置，绝不提交）
 DEPLOY.md
+
+# PyInstaller 打包产物（22 MB 二进制，不应提交）
+build/
+
+# 临时诊断脚本（不应该进版本库）
+scripts/probe_*.py
+scripts/diagnose_*.py
+
+# IDE / Agent 工作目录
+.trae/
+HANDOFF.md

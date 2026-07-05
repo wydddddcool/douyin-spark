@@ -18,12 +18,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = ROOT / "auth" / "state.json"
 
-ECS_INSTANCE_ID = os.environ.get("ECS_INSTANCE_ID", "i-j6c5u32x6bwnbu2xcrje")
+ECS_INSTANCE_ID = os.environ.get("ECS_INSTANCE_ID", "")  # 必须从环境变量传
 ECS_REGION = os.environ.get("ECS_REGION", "cn-hongkong")
-ECS_REMOTE_FILE = "/root/deploy/douyin-spark/data/auth/state.json"
+ECS_REMOTE_FILE = os.environ.get("ECS_REMOTE_FILE", "")
 ECS_TMP_FILE = "/tmp/state_upload.b64"
 
-WEB_URL = os.environ.get("WEB_URL", "http://spark.whoisbot.online")
+WEB_URL = os.environ.get("WEB_URL", "")
 
 CHUNK_SIZE = 6000  # 每片字符数，远小于阿里云 RunCommand 的限制
 

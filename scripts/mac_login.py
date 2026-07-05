@@ -20,12 +20,29 @@ import os
 import sys
 import time
 import subprocess
+import json as json_lib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = ROOT / "auth" / "state.json"
+QR_SCREENSHOT = ROOT / "auth" / "qrcode_local.png"
 
 CHAT_URL = "https://www.douyin.com/chat"
+
+LOGGED_IN_SELECTORS_JS = """() => {
+    const sels = [
+        '[class*="conversationConversationItem"]',
+        '[class*="ConversationItem"]',
+        '[class*="chatItem"]',
+        '[class*="contactItem"]',
+        '[data-e2e="chat-item"]',
+    ];
+    for (const sel of sels) {
+        const el = document.querySelector(sel);
+        if (el && el.getBoundingClientRect().width > 0) return true;
+    }
+    return false;
+}"""
 
 
 def check_dependencies():
@@ -58,8 +75,8 @@ def main():
     with sync_playwright() as p:
         # channel="chrome" = 用系统装的 Google Chrome，不是 headless Chromium
         browser = p.chromium.launch(
-            headless=False,  # 真实窗口，必须
-            channel="chrome",  # 用 Chrome 不是 Chromium
+            headless=False,
+            channel="chrome",
         )
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
@@ -75,18 +92,7 @@ def main():
         print()
 
         # 检查是否已经登录
-        logged_in = page.evaluate("""() => {
-            const sels = [
-                '[class*="conversationConversationItem"]',
-                '[class*="ConversationItem"]',
-                '[data-e2e="chat-item"]',
-            ];
-            for (const sel of sels) {
-                const el = document.querySelector(sel);
-                if (el && el.getBoundingClientRect().width > 0) return true;
-            }
-            return false;
-        }""")
+        logged_in = page.evaluate(LOGGED_IN_SELECTORS_JS)
 
         if logged_in:
             print("✅ 检测到已登录！直接保存 state.json")
@@ -99,32 +105,46 @@ def main():
             print("│  2. 用你的抖音 App 「扫一扫」对准它           │")
             print("│  3. 在手机上点「登录」                         │")
             print("│                                                │")
-            print("│  本脚本会每 5 秒检测一次登录状态                │")
-            print("│  登录成功（看到会话列表）后会自动继续          │")
+            print("│  如果窗口被挡住，看脚本打印的截图路径           │")
+            print("│  脚本会每 5 秒检测一次登录状态（最多 5 分钟）  │")
             print("└────────────────────────────────────────────────┘")
             print()
 
-            # 最多等 3 分钟
-            for i in range(36):
+            # 截图整页保存
+            try:
+                QR_SCREENSHOT.parent.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(QR_SCREENSHOT), full_page=False)
+                print(f"📷 已截图整页到: {QR_SCREENSHOT}")
+            except Exception as e:
+                print(f"⚠ 整页截图失败: {e}")
+
+            # 尝试单独截二维码区域
+            try:
+                qr_box = page.locator('img.RhjdbXj8, [class*="qrcode"] img, [class*="QrCode"]').first
+                if qr_box.is_visible(timeout=2000):
+                    qr_box.screenshot(path=str(QR_SCREENSHOT))
+                    print(f"📷 已截图二维码区域到: {QR_SCREENSHOT}")
+            except Exception as e:
+                print(f"⚠ 二维码区域截图失败: {e}")
+
+            # 一直等（不超时）
+            # 每 5 秒检测一次，最多 1 小时；登录成功立即保存
+            MAX_WAIT_SECONDS = 3600
+            for i in range(MAX_WAIT_SECONDS // 5):
                 page.wait_for_timeout(5000)
-                logged_in = page.evaluate("""() => {
-                    const sels = [
-                        '[class*="conversationConversationItem"]',
-                        '[class*="ConversationItem"]',
-                        '[data-e2e="chat-item"]',
-                    ];
-                    for (const sel of sels) {
-                        const el = document.querySelector(sel);
-                        if (el && el.getBoundingClientRect().width > 0) return true;
-                    }
-                    return false;
-                }""")
+                logged_in = page.evaluate(LOGGED_IN_SELECTORS_JS)
                 if logged_in:
-                    print(f"✅ 检测到登录成功！（{i * 5 + 5} 秒）")
+                    print(f"✅ 检测到登录成功！（{(i + 1) * 5} 秒）")
                     break
-                print(f"  等待扫码... ({i * 5 + 5} 秒)")
+                if (i + 1) % 6 == 0:
+                    print(f"  等待扫码... ({(i + 1) * 5} 秒)")
+                    # 每 30 秒重新截一次图（防止二维码刷新）
+                    try:
+                        page.screenshot(path=str(QR_SCREENSHOT), full_page=False)
+                    except Exception:
+                        pass
             else:
-                print("✗ 3 分钟内未检测到登录，超时")
+                print("✗ 1 小时内未检测到登录，超时")
                 browser.close()
                 sys.exit(1)
 
@@ -138,9 +158,8 @@ def main():
         print(f"   大小：{STATE_PATH.stat().st_size} bytes")
 
         # 验证
-        import json
         with open(STATE_PATH) as f:
-            state = json.load(f)
+            state = json_lib.load(f)
         cookies = state.get("cookies", [])
         print(f"   cookies: {len(cookies)} 个")
         dy_cookies = [c for c in cookies if "douyin.com" in c.get("domain", "")]
