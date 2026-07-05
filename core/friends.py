@@ -74,7 +74,9 @@ def _extract_conversations(page: Page) -> list[dict]:
     logger.info("收集到 %d 个候选 item（去重前）", len(candidates))
 
     # 3. 用 compareDocumentPosition 过滤出"最外层"节点
-    #    Node.DOCUMENT_POSITION_CONTAINED_BY == 16，位运算判断是否 other 是 el 的后代
+    #    Node.DOCUMENT_POSITION_CONTAINS == 8：el 包含 other（el 是 other 的祖先）
+    #    因此 "el_i 是 outer" ⇔ "没有任何 candidate 是 el_i 的祖先"
+    #    ⇒ 检查 el_i.compareDocumentPosition(other) 是否含 8
     outermost = []
     n = len(candidates)
     for i in range(n):
@@ -84,13 +86,13 @@ def _extract_conversations(page: Page) -> list[dict]:
             for j in range(n):
                 if i == j:
                     continue
-                # 检查 el_j 是否被 el_i 包含（我们关心的是 el_i 不能被包含）
+                # 检查 el_j 是否是 el_i 的祖先：是的话 el_i 就不是最外层
                 pos = el_i.evaluate(
-                    "(el, other) => other.compareDocumentPosition(el)",
+                    "(el, other) => el.compareDocumentPosition(other)",
                     candidates[j],
                 )
-                # pos & 16 (CONTAINED_BY) 表示 el_i 是 el_j 的后代 ⇒ el_i 不是最外层
-                if pos & 16:
+                # pos & 8 (CONTAINS) 表示 el_j 是 el_i 的祖先 ⇒ el_i 是 inner
+                if pos & 8:
                     is_outer = False
                     break
             if is_outer:
