@@ -1,21 +1,18 @@
 """
-upload_state.py — 把 Mac 本地的 state.json 上传到 ECS 容器
+upload_state.py — 把 Mac 本地的 state.json 上传到 ECS 容器（分片版）
 
-前置：先跑 mac_login.py 生成新的 state.json
+通过 aliyun CLI 分片传 base64，避开 URL 长度限制（414 错误）。
 
 用法：
     python3 scripts/upload_state.py
-    # 默认上传到 ECS i-j6c5u32x6bwnbu2xcrje /root/deploy/douyin-spark/data/auth/state.json
-    # 然后 docker exec cp 到 /app/auth/state.json
-
-为什么走 ECS host 而不直接 docker cp？
-- bind mount data/auth -> /app/auth，直接写 host 端就生效
-- 写完可以立刻看到 /api/status 的 has_auth 变 true
 """
 import os
 import sys
 import base64
 import subprocess
+import json
+import time
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,76 +20,44 @@ STATE_PATH = ROOT / "auth" / "state.json"
 
 ECS_INSTANCE_ID = os.environ.get("ECS_INSTANCE_ID", "i-j6c5u32x6bwnbu2xcrje")
 ECS_REGION = os.environ.get("ECS_REGION", "cn-hongkong")
-ECS_REMOTE_DIR = "/root/deploy/douyin-spark/data/auth"
-ECS_REMOTE_FILE = f"{ECS_REMOTE_DIR}/state.json"
+ECS_REMOTE_FILE = "/root/deploy/douyin-spark/data/auth/state.json"
+ECS_TMP_FILE = "/tmp/state_upload.b64"
 
 WEB_URL = os.environ.get("WEB_URL", "http://spark.whoisbot.online")
 
+CHUNK_SIZE = 6000  # 每片字符数，远小于阿里云 RunCommand 的限制
 
-def main():
-    if not STATE_PATH.exists():
-        print(f"✗ state.json 不存在: {STATE_PATH}")
-        print("  请先跑 python3 scripts/mac_login.py 生成 state.json")
-        sys.exit(1)
 
-    size = STATE_PATH.stat().st_size
-    print(f"▶ 本地 state.json: {STATE_PATH} ({size} bytes)")
-
-    # 检查阿里云 CLI
-    aliyun = subprocess.run(["which", "aliyun"], capture_output=True, text=True)
-    if aliyun.returncode != 0:
-        print("✗ aliyun CLI 未安装")
-        sys.exit(1)
-
-    # 用 base64 + aliyun RunCommand 上传（绕过 scp/rsync）
-    print(f"▶ 上传到 ECS {ECS_INSTANCE_ID} {ECS_REMOTE_FILE}")
-    with open(STATE_PATH, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-
-    cmd = (
-        f"mkdir -p {ECS_REMOTE_DIR} && "
-        f"echo '{b64}' | base64 -d > {ECS_REMOTE_FILE} && "
-        f"echo 'uploaded' && "
-        f"ls -la {ECS_REMOTE_FILE} && "
-        f"docker exec douyin-spark ls -la /app/auth/state.json 2>&1"
-    )
-
-    result = subprocess.run(
+def run_remote(cmd: str, timeout: int = 60) -> str:
+    """执行 ECS 远程命令并返回 stdout（base64 解码后）"""
+    r = subprocess.run(
         [
             "aliyun", "ecs", "RunCommand",
             "--RegionId", ECS_REGION,
             "--InstanceId.1", ECS_INSTANCE_ID,
             "--Type", "RunShellScript",
             "--CommandContent", cmd,
-            "--Timeout", "60",
+            "--Timeout", str(timeout),
         ],
         capture_output=True, text=True,
     )
-
-    # 提取 InvokeId 和 CommandId
-    import re
     invoke_id = None
     command_id = None
-    for line in (result.stdout + result.stderr).splitlines():
+    for line in (r.stdout + r.stderr).splitlines():
         m = re.search(r'"InvokeId":\s*"([^"]+)"', line)
-        if m:
-            invoke_id = m.group(1)
+        if m: invoke_id = m.group(1)
         m = re.search(r'"CommandId":\s*"([^"]+)"', line)
-        if m:
-            command_id = m.group(1)
-
+        if m: command_id = m.group(1)
     if not invoke_id:
         print("✗ 没拿到 InvokeId")
-        print(result.stdout)
-        print(result.stderr)
+        print(r.stdout)
+        print(r.stderr)
         sys.exit(1)
 
-    print(f"  InvokeId: {invoke_id}")
-
-    # 轮询结果
-    print("▶ 等命令执行...")
-    for i in range(20):
-        result = subprocess.run(
+    # 等结果
+    for _ in range(40):
+        time.sleep(2)
+        r2 = subprocess.run(
             [
                 "aliyun", "ecs", "DescribeInvocationResults",
                 "--RegionId", ECS_REGION,
@@ -101,93 +66,85 @@ def main():
             ],
             capture_output=True, text=True,
         )
-        out = result.stdout
-        if '"CommandId"' in out or '"Finished"' in out or "uploaded" in out:
-            break
-        import time
-        time.sleep(2)
+        try:
+            data = json.loads(r2.stdout)
+            inv = data["Invocation"]["InvocationResults"]["InvocationResult"]
+            if isinstance(inv, list) and inv:
+                inv = inv[0]
+            if "Output" in inv:
+                return base64.b64decode(inv["Output"]).decode(errors="replace")
+            if "Error" in inv or "InvokeRecord" in inv:
+                # 没 Output 但有 record
+                return ""
+        except Exception:
+            continue
+    print("✗ DescribeInvocationResults 超时")
+    sys.exit(1)
 
-    # 解析最终输出
-    try:
-        data = json.loads = __import__("json").loads(out)
-        from json import loads as jl
-        data = jl(out)
-        out_b64 = data["Invocation"]["InvocationResults"]["InvocationResult"][0]["Output"]
-        final = base64.b64decode(out_b64).decode()
-    except Exception as e:
-        print(f"解析失败: {e}")
-        print("raw:", out[:500])
+
+def main():
+    if not STATE_PATH.exists():
+        print(f"✗ state.json 不存在: {STATE_PATH}")
         sys.exit(1)
 
-    print("─── ECS 端输出 ───")
-    print(final)
-    print("──────────────────")
+    size = STATE_PATH.stat().st_size
+    print(f"▶ 本地 state.json: {STATE_PATH} ({size} bytes)")
+    with open(STATE_PATH, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    print(f"▶ base64 长度: {len(b64)} chars")
 
-    if "uploaded" not in final:
-        print("✗ 上传失败")
-        sys.exit(1)
+    # 分片
+    chunks = [b64[i:i + CHUNK_SIZE] for i in range(0, len(b64), CHUNK_SIZE)]
+    print(f"▶ 分 {len(chunks)} 片，每片 {CHUNK_SIZE} chars")
 
-    # 重启容器让 web app 重新加载 state.json
-    print("\n▶ 重启 ECS 容器让 web app 加载新 state.json")
-    restart = subprocess.run(
-        [
-            "aliyun", "ecs", "RunCommand",
-            "--RegionId", ECS_REGION,
-            "--InstanceId.1", ECS_INSTANCE_ID,
-            "--Type", "RunShellScript",
-            "--CommandContent",
-            "docker restart douyin-spark && sleep 5 && curl -sS http://localhost:5000/api/status",
-            "--Timeout", "60",
-        ],
-        capture_output=True, text=True,
+    # 第 1 步：清空目标文件
+    print(f"\n=== Step 1: 清空远程文件 {ECS_TMP_FILE} ===")
+    out = run_remote(f"rm -f {ECS_TMP_FILE} && echo cleared")
+    print(f"  {out.strip()}")
+
+    # 第 2 步：分片上传
+    print(f"\n=== Step 2: 分片上传 ===")
+    for i, chunk in enumerate(chunks):
+        # 用 echo 追加，避免转义问题（base64 安全字符）
+        cmd = f"echo -n '{chunk}' >> {ECS_TMP_FILE} && wc -c {ECS_TMP_FILE}"
+        out = run_remote(cmd)
+        m = re.search(r'(\d+)\s+\S*state_upload\.b64', out)
+        size_now = int(m.group(1)) if m else "?"
+        print(f"  片 {i + 1}/{len(chunks)}: 远程 base64 累计 {size_now} chars")
+        if i == 0:
+            assert size_now == len(chunk), f"第一片大小不对: {size_now} vs {len(chunk)}"
+
+    # 第 3 步：base64 decode + 写最终文件
+    print(f"\n=== Step 3: 解码 + 移动到目标位置 ===")
+    cmd = (
+        f"base64 -d {ECS_TMP_FILE} > {ECS_REMOTE_FILE} && "
+        f"rm -f {ECS_TMP_FILE} && "
+        f"ls -la {ECS_REMOTE_FILE} && "
+        f"echo '---md5---' && md5sum {ECS_REMOTE_FILE}"
     )
-    invoke_id = None
-    command_id = None
-    for line in (restart.stdout + restart.stderr).splitlines():
-        m = re.search(r'"InvokeId":\s*"([^"]+)"', line)
-        if m: invoke_id = m.group(1)
-        m = re.search(r'"CommandId":\s*"([^"]+)"', line)
-        if m: command_id = m.group(1)
+    out = run_remote(cmd)
+    print(out)
 
-    if not invoke_id:
-        print("✗ 重启失败")
-        print(restart.stdout)
-        print(restart.stderr)
-        sys.exit(1)
-
-    import time
-    time.sleep(15)
-
-    result = subprocess.run(
-        [
-            "aliyun", "ecs", "DescribeInvocationResults",
-            "--RegionId", ECS_REGION,
-            "--InvokeId", invoke_id,
-            "--CommandId", command_id,
-        ],
-        capture_output=True, text=True,
+    # 第 4 步：重启容器
+    print(f"\n=== Step 4: 重启容器加载新 state.json ===")
+    out = run_remote(
+        "docker restart douyin-spark && sleep 5 && "
+        "curl -sS http://localhost:5000/api/status",
+        timeout=60,
     )
-    try:
-        from json import loads as jl
-        data = jl(result.stdout)
-        out_b64 = data["Invocation"]["InvocationResults"]["InvocationResult"][0]["Output"]
-        final = base64.b64decode(out_b64).decode()
-        print("─── 重启后状态 ───")
-        print(final)
-        print("──────────────────")
+    print(out)
 
-        # 验证 has_auth
-        if '"has_auth": true' in final or '"has_auth":true' in final:
-            print("\n✅ 上传 + 加载成功！has_auth = true")
-            print(f"\n刷新 {WEB_URL} → 跳过扫码直接进主页面")
-            print("然后点 '从抖音拉取好友列表' 验证")
-        else:
-            print("\n⚠ has_auth 仍为 false — state.json 可能不被认作有效登录态")
-            print("  可能原因：抖音服务器侧 session 已失效")
-            print("  这种情况需要重新扫码，请确认 mac_login.py 扫码成功")
-    except Exception as e:
-        print(f"解析失败: {e}")
-        print("raw:", result.stdout[:500])
+    # 验证
+    if '"has_auth": true' in out or '"has_auth":true' in out:
+        print("\n✅ has_auth=true！state.json 已生效")
+        print(f"\n刷新 {WEB_URL} → 直接进入主页面")
+        print("然后点 '从抖音拉取好友列表' 验证完整链路")
+    else:
+        print("\n⚠ has_auth 仍为 false")
+        print("  可能原因：")
+        print("  1. state.json 不是有效的抖音登录态（cookie 过期）")
+        print("  2. 抖音服务端对 ECS IP 段有限制")
+        print("  3. web app 还没加载完，curl 太早")
 
 
 if __name__ == "__main__":
