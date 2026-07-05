@@ -287,6 +287,7 @@
     <div class="btn-group">
       <button class="btn btn-primary" id="btn-run" onclick="triggerRun()">▶ 立即运行</button>
       <button class="btn btn-outline" id="btn-setup" onclick="triggerSetup()">🔑 扫码登录</button>
+      <button class="btn btn-outline hidden" id="btn-setup-reset" onclick="resetSetup()" title="上一次扫码任务卡住？点这里重置后再试">🔄 重置扫码</button>
       <button class="btn btn-outline" onclick="refreshStatus()">↻ 刷新状态</button>
     </div>
     <!-- QR Inline Card (hidden by default, 紧贴扫码登录按钮下方) -->
@@ -556,6 +557,21 @@ function showQrCard() {
 function hideQrCard() {
   document.getElementById('qr-card').classList.add('hidden');
   if (_qrPollTimer) { clearInterval(_qrPollTimer); _qrPollTimer = null; }
+}
+
+async function resetSetup() {
+  try {
+    const r = await fetch(API + '/api/setup/reset', {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      toast('✅ 扫码任务已重置');
+      await refreshStatus();
+    } else {
+      toast('重置失败: ' + (d.error || ''));
+    }
+  } catch (e) {
+    toast('请求失败');
+  }
 }
 
 async function triggerSetup() {

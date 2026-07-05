@@ -417,6 +417,15 @@ def api_setup():
     return jsonify({"ok": True, "message": "正在打开登录页，请在弹出窗口中扫码"})
 
 
+@app.route("/api/setup/reset", methods=["POST"])
+def api_setup_reset():
+    """强制重置扫码任务状态 — 用于上一轮线程卡住时让按钮恢复可用"""
+    global _runtime
+    _runtime["setup_status"] = None
+    logger.info("手动重置扫码任务状态")
+    return jsonify({"ok": True, "message": "扫码任务状态已重置，可重新发起"})
+
+
 @app.route("/api/qrcode")
 def api_qrcode():
     """获取二维码截图"""
